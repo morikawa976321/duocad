@@ -32,8 +32,16 @@ export function lineFromPoints(
   const length = dimension(typedLength, Math.hypot(du, dv))
   const angle = dimension(typedAngleDeg, Math.atan2(dv, du) * DEG)
   if (!(length > 0)) return null
-  const rad = angle / DEG
-  return { p0, p1: [p0[0] + length * Math.cos(rad), p0[1] + length * Math.sin(rad)] }
+  const [cos, sin] = unitAtDeg(angle)
+  return { p0, p1: [p0[0] + length * cos, p0[1] + length * sin] }
+}
+
+/** 90度の倍数は厳密な (cos, sin) を返す(`Math.cos(Math.PI/2)` は 6e-17 で、90度の線の終点の座標に 1e-15 台のずれが入る)。 */
+function unitAtDeg(deg: number): [number, number] {
+  const turn = ((deg % 360) + 360) % 360
+  if (turn % 90 === 0) return [[1, 0], [0, 1], [-1, 0], [0, -1]][turn / 90] as [number, number]
+  const rad = deg / DEG
+  return [Math.cos(rad), Math.sin(rad)]
 }
 
 /**
@@ -49,7 +57,8 @@ export function lineAngleDeg(p0: Point2, p1: Point2): number {
 }
 
 /**
- * 軸平行の長方形。打った寸法も「引いた向き」へ伸ばす(符号は対角がどちら側かで決まる)。
+ * 軸平行の長方形。幅と高さを両方打ったときは打った符号が向きを決める(正は +u / +v 側、負は逆側。マウスの位置は見ない)。
+ * 片方しか打っていなければ、打った寸法も「引いた向き」へ伸ばす(符号は対角がどちら側かで決まる)ので、負は作れない。
  * `opposite === corner`(点を1つ置いて寸法だけ打つ経路)では正側。
  */
 export function rectFromPoints(
@@ -58,6 +67,16 @@ export function rectFromPoints(
   typedWidth: number | undefined,
   typedHeight: number | undefined,
 ): { corner: Point2; width: number; height: number } | null {
+  if (typedWidth !== undefined && typedHeight !== undefined) {
+    const w = Math.abs(typedWidth)
+    const h = Math.abs(typedHeight)
+    if (!(w > 0) || !(h > 0)) return null
+    return {
+      corner: [typedWidth < 0 ? corner[0] - w : corner[0], typedHeight < 0 ? corner[1] - h : corner[1]],
+      width: w,
+      height: h,
+    }
+  }
   const width = dimension(typedWidth, Math.abs(opposite[0] - corner[0]))
   const height = dimension(typedHeight, Math.abs(opposite[1] - corner[1]))
   if (!(width > 0) || !(height > 0)) return null

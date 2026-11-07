@@ -203,6 +203,8 @@ class StableUpdater:
                 return 409, {"error": state.get("reason")}
             try:
                 reason = self.update_blocker()
+            except TimeoutError:
+                return 503, {"error": "サーバが別の処理で塞がっていて、状態を確かめられなかった。終わってからもう一度押すこと"}
             except Exception as error:  # noqa: BLE001  (イベントループが塞がっている等。HTTPスレッドへ漏らさない)
                 return 503, {"error": f"サーバの状態を確かめられなかった: {error!r}"}
             if reason is not None:

@@ -130,7 +130,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   thread: ['profile', 'clearance'],
   delete_faces: [],
   offset_faces: ['distance'],
-  boolean_body: ['target_ref', 'mode'],
+  boolean_body: ['target_ref', 'mode', 'keep_tool'],
   move_sketch_entities: ['dx', 'dy', 'copy', 'mode', 'angle', 'center', 'center_entity'],
   move_body: ['dx', 'dy', 'dz', 'copy', 'mode', 'angle', 'axis_edge', 'axis_point', 'axis_dir', 'center_vertex'],
   mirror_sketch_entities: ['axis'],
@@ -228,7 +228,7 @@ export interface CommandArguments {
   thread: { profile: string; clearance?: number }
   delete_faces: Record<string, never>
   offset_faces: { distance: number }
-  boolean_body: { target_ref: object; mode: string }
+  boolean_body: { target_ref: object; mode: string; keep_tool?: boolean }
   move_sketch_entities: { dx?: number; dy?: number; copy?: boolean; mode?: string; angle?: number; center?: unknown[]; center_entity?: object }
   move_body: { dx?: number; dy?: number; dz?: number; copy?: boolean; mode?: string; angle?: number; axis_edge?: object; axis_point?: unknown[]; axis_dir?: unknown[]; center_vertex?: object }
   mirror_sketch_entities: { axis: object }
@@ -334,6 +334,10 @@ interface AppliedVerbBase {
   seq: number
   client_op: number | null
   change?: undefined
+  /** 新しい操作で捨てたやり直しの件数(捨てたときだけ)。 */
+  discarded_redo?: number
+  /** 形が変わったので外した、構えたコマンドの引数名(外したときだけ)。 */
+  dropped_args?: string[]
 }
 
 /** 変更イベント(verb ではない。操作ログに載らない)に共通するフィールド。 */
@@ -359,7 +363,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'shell_body'; body_id: string; changed_bodies: string[] })
-  | (AppliedVerbBase & { verb: 'thread'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'thread'; body_id: string; changed_bodies: string[]; diameter: number; pitch: number })
   | (AppliedVerbBase & { verb: 'delete_faces'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'offset_faces'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'boolean_body'; target_body_id: string; mode: string; removed_bodies: string[]; changed_bodies: string[] })
@@ -381,7 +385,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'clear_loads'; face_count: number })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; created: string[] })
   | (AppliedVerbBase & { verb: 'pattern_circular'; created: string[] })
-  | (AppliedVerbBase & { verb: 'import_svg'; sketch_id: string; entity_ids: string[]; source_name: string; entity_count: number })
+  | (AppliedVerbBase & { verb: 'import_svg'; sketch_id: string; entity_ids: string[]; source_name: string; entity_count: number; size_mm: number[]; region_count: number; skipped: string })
   | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
   | (AppliedVerbBase & { verb: 'undo'; undone: string })
   | (AppliedVerbBase & { verb: 'redo'; redone: string })

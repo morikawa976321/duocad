@@ -6,7 +6,7 @@
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
 差別化はUIでも機能数でもなく **交互操作**（AIが集合を選ぶ → 人が過不足を直す → AIが操作を適用）にある。
 
-このREADMEは開発を再開するときの入口である。単位は mm 固定。
+この文書は開発を再開するときの入口である。単位は mm 固定。
 
 **制作に使うときは [docs/MANUAL.md](MANUAL.md)**（制作用の安定版と開発用の使い分け）。
 
@@ -37,8 +37,8 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    (2) howの入力がある（点から導ける寸法欄 `NumberArgSpec.fromPoints` は how ではない）のどちらかだけで、
    どちらでもなければ最後のクリックで即適用。正は `web/src/commands/command.ts` の `needsEnter`、
    顔ぶれは `tests/test_ui_command_wiring.py` が固定する。
-4. **エラーはすべてトーストで見せる**（`web/src/Toast.svelte`）。情報（読み込んだ部品数等）は画面に出さず
-   `window.__duocad.messages` で読めるだけ。
+4. **エラーはすべてトーストで見せる**（`web/src/Toast.svelte` の `fail`）。見落とされると困る知らせ（取り消した・更新した等）は `inform` の札で出し、
+   それ以外の情報（読み込んだ部品数等）は画面に出さず `window.__duocad.messages` で読めるだけ。
 5. **コメントは、コードに現れない制約だけを書く。** [CLAUDE.md](../CLAUDE.md) §コメント。
 
 AI側の対応する規則は [MCP.md](../MCP.md)「AIはどこまで自分でやるか」が正。画面側の判断は [docs/UI.md](UI.md)。
@@ -97,6 +97,66 @@ cd web; npm run dev                                 # 画面(5173)
 画面は既定の `ws://127.0.0.1:8765` へ落ちて繋がる（Pythonサーバは立てておくこと）。
 このときだけは `web/dist` の作り直しが要らない。
 型検査は `npm run check`（`tsc --noEmit` ＋ `svelte-check`。`.svelte` の中も見る）。
+
+### 1.4 ブラウザのファイル本文を渡す HTTP
+
+`POST /api/upload?filename=<UTF-8 を URL エンコードした元ファイル名>` は、開発版・安定版の両方で使える。
+本文はファイルそのもの（multipart ではない。画面は `Content-Type: application/octet-stream` で送る）。
+`Content-Length` が必須で、chunked は受けない。成功は 200 と `{"path":"サーバ上の絶対パス"}`。
+このパスを既存の `import_step` / `import_svg` の `path` として渡す。SVG は既存どおり `sketch_id` も必要。
+画面は、この取り込みの WebSocket メッセージに `expected_generation`（落とした文書の世代。`state.generation`）を添える。
+サーバは実行の直前に今の世代と比べ、違えば実行せずに断る（契約は `duocad/net/ws.py` の冒頭）。本文の送信は
+WebSocket と別のスレッドで進むので、別の画面や MCP が文書を切り替えた直後は、画面が切り替えの状態配信を
+受け取る前に取り込みを送りうる。画面の側の照合だけでは、切り替わった後の文書へ入る。
+サーバが照合するのは文書の世代だけで、モード・開いているスケッチは照合しない（取り込み先は要求の `sketch_id` か
+文書そのもので、別の接続のモードの切り替えでは変わらない。画面側のモードの照合は、同じ画面での移動のためのもの）。
+ここでは内容の STEP / SVG としての妥当性や取り込みは検査せず、既存 verb に任せる。MCP の道具は増やさない。
+
+守り方は `/api/update` の POST と同じで、Python が配るページの `Origin` だけ許し、無し・`null`・別オリジンは 403。
+`Host` も実際の HTTP ポートの `127.0.0.1` / `localhost` に限定する。CORS ヘッダは返さない。
+`/api/update` が無い開発版でもアップロードは有効。
+
+上限の正は `duocad/net/uploads.py` の `UPLOAD_MAX_BYTES`（128 MiB）。数十 MB の部品 STEP に余裕を取りつつ、
+1 ファイルが占めるディスク量を制限するための設計値で、実測から導いた値ではない。
+`/duocad-config.json` に同じ値を `upload_max_bytes` として載せ、画面の事前検査もこれを使う。
+既存の `/mcp`・`/api/update`・WebSocket の 8 MiB 制限は変えない。
+本文は 64 KiB ずつファイルへ流す。Content-Length が上限を超えると、本文を読まずに 413 の JSON を返して接続を閉じる。
+上限以下の要求を断る場合は、送信中の接続中断で拒否が通信エラーに化けないよう、保存せず読み捨ててから JSON を返す。
+受信の無通信が 30 秒続くと打ち切る。
+
+失敗の封筒は `{"error":"識別子","message":"表示用の日本語"}`。種類は次のとおり。
+
+| HTTP | error | 条件 |
+|---|---|---|
+| 400 | `invalid_filename` | 名前が無い・複数・不正な UTF-8・危険な名前・長すぎる名前 |
+| 400 | `invalid_length` / `incomplete_body` | 不正な長さ / 本文が途中で終わった |
+| 403 | `forbidden` | Origin または Host が許可外 |
+| 408 | `receive_failed` | 受信タイムアウト・接続の中断 |
+| 411 | `length_required` | Content-Length が無い・複数、または Transfer-Encoding がある |
+| 413 | `too_large` | 上限超過 |
+| 415 | `unsupported_extension` | `.step`・`.stp`・`.svg` 以外（大文字小文字は問わない） |
+| 500 | `storage_error` | 保存・整理に失敗 |
+| 503 | `shutting_down` | サーバ終了中 |
+
+名前は書き換えず、不正なものを断る。区切り・制御文字・Windows の禁止文字と予約名・末尾の空白やドットを禁止し、
+UTF-16 で 120 単位かつ UTF-8 で 240 バイト以内に限る。Windows では一時パス全体も 240 UTF-16 単位以内に限る。
+日本語名はそのまま保存され、取り込みログの `source_name` も元の名前になる。
+区切りを含まない `bracket_v1..2.step`・`..step` などは使える。
+
+置き場は OS の一時フォルダの `duocad-upload-<一意な値>/<アップロードごとの一意なフォルダ>/<元ファイル名>`。
+サーバごとに所有し、受信完了から 1 時間経ったものを次の正常なアップロード開始時に削除する。
+取り込み済みか未使用かは区別せず、受信途中のものは掃除から外す。失敗した受信は直ちに削除する。
+期限切れのフォルダを削除できなくても新しいアップロードを受け、次の開始時に削除を再試行する。
+HTTP サーバの shutdown / close と通常のプロセス終了（atexit）でも所有する一時フォルダ全体を消す。
+ほかの読み手が開いたままで消せないファイル（Windows）は残し、終了処理は例外で止めない。
+強制終了・電源断では終了処理を実行できない。返ったパスは 1 時間以内に取り込みへ渡すこと。
+ログに本文・図形を埋める既存 verb のため、取り込み後の再生はこの一時ファイルに依存しない。
+
+画面側の口は `web/src/uploadDroppedFile.ts` の `uploadDroppedFile(file: File, options?: {fetch?: typeof fetch; pageUrl?: string}): Promise<string>`。
+成功時は一時パス、失敗時は日本語の `Error.message` を返す（Promise の reject）。省略時はブラウザの fetch と現在のページ URL を使う。
+先に同一オリジンの `/duocad-config.json` で上限と対応を確認し、ファイルを POST する。
+Vite の開発サーバは設定 JSON も HTTP プロキシも持たず、別オリジンの Python へ直接送ることも許可しないため使えない。
+この場合は Python が配る画面を開く案内を返す。パスを渡す既存の取り込みはそのまま使える。
 
 ---
 
@@ -189,7 +249,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 
-**各スクリプトが自分で `duocad.mcp_server` を立てて、終わったら止める**ので、コマンドを1本ずつ叩くだけでよい。
+**各スクリプトが自分で `duocad.mcp_server` を立てて、終わったら止める**（`smoke-section-stencil.mjs` だけはバックエンドを使わず Vite で配る）ので、コマンドを1本ずつ叩くだけでよい。
 **毎回まっさらな文書で始まる**。ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すれば最優先）。
 何を smoke に書くか・書かないかは [docs/SMOKE_TESTING.md](SMOKE_TESTING.md)。
 
@@ -210,10 +270,31 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 
 STEPを読む smoke（`smoke-face-culling.mjs`）は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
 骨格は `web/scripts/harness.mjs` の `runSmoke`（使い捨ての `--models-dir`、OSが選ぶ空きポートなので並列可。
-`--port` / `--http-port` / `--timeout` は全本が読む）。
+`runSmoke` を使う本は `--port` / `--http-port` / `--timeout` を読む）。
 
 **verb ごとの画面の検査は持たない。** AI側とコアの契約は pytest（`tests/test_mcp_verbs.py` ほか）、
 TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致は `tests/test_ghost_agreement.py` が持つ。
+
+### develop から main の前に回す検査（`tools/gate.ps1`）
+
+CI が無いので、develop → main の PR を出す前に、pytest 全件・`npm run check`・smoke 全本を順に回す。段ごとの合否と所要時間を表で出し、
+落ちた段は表のあとに出力の末尾 30 行を出す。1 段でも落ちれば終了コード 1（引数の誤りは 2）。**PR 本文に表と、落ちた段の末尾を貼る。**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-Skip 段,...] [-List] [-PytestArgs 引数,...] [-WebDist <出力先>] [-TailLines 30]
+```
+
+- 段の名前は `-List` が出す: `pytest`・`check`・`build`・`smoke*`（`web/scripts/smoke*.mjs` のファイル名から `.mjs` を除いたもの）。`-Only` / `-Skip` は
+  `smoke*` のようなワイルドカードとコンマ区切りを受ける。`-PytestArgs` で pytest の段を絞れる（例: `-Only pytest -PytestArgs tests/test_resolution.py`）。
+- smoke の段を選ぶと `build` が先頭に自動で入る（`npm run build -- --outDir $env:TEMP\duocad-gate-dist --emptyOutDir`。出力先は `-WebDist` か環境変数
+  `GATE_WEB_DIST` で変えられる。相対パスは呼んだ場所から読む）。smoke には `--web-dist` でその出力先を渡す。`build` が落ちたら smoke は SKIP。
+- `build` か smoke を選んだとき、リポジトリの中（`web\dist` を含む）・リポジトリを含む場所を出力先に指すと断る。綴りでは比べず
+  （ジャンクション・シンボリックリンク・短い名前・`\\?\` つきの綴りが同じ場所を指す）、実体のパスを根まで遡って、フォルダそのものが
+  同じかで見る（`.venv` の python の `os.path.realpath` と `os.path.samefile`）。
+- `build` は出力先の中身を消すので、消してよいと分かる場所へしか組み立てない: 既定の場所、まだ無い場所、空の場所、前に gate が
+  作った場所（隣に目印のファイル `<出力先>.gate-owned` を置く）。中身のあるほかの場所は、`index.html` があっても断る。
+  前の組み立てを読むだけ（`-Skip build`）なら、目印は要らない。
+- 8765・8766・8775・8776 には触らない（smoke は各スクリプトが使い捨ての `--models-dir` と OS が選ぶ空きポートで立てる）。
 
 ---
 
@@ -248,7 +329,8 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `"mesh"` | `Body.mesh`（`Mesh` = 頂点＋三角形。不変） | **表示 / STL書き出し / 削除 / 表示の切り替え / 名前の変更だけ** |
 
 **メッシュボディに編集verbを効かせない**（理由は `duocad/meshbody.py` のモジュールdocstring）。断りの文言は
-`meshbody.reject` の1箇所、門は `verbs/_common.editable_body` と `verbs/extrude._resolve_target` の2つ。
+`meshbody.reject` の1箇所。編集 verb の門は `verbs/_common.editable_body`（押し出し・回転体・ロフトは `verbs/extrude._editable_target` 経由）で、
+選択・述語・スケッチを貼る面・形状最適化の保持/除外の入口も `meshbody.reject` を呼ぶ。
 
 - **扱いは「名指ししたら断る / 導出した集合からは黙って外す」。** 根拠は「呼び出し側が何を主張したか」——
   面・辺・頂点を指す選択・`predicates` の `body` 明示・保持/除外ソリッドへの割り当ては名指しなので断り、
@@ -264,7 +346,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 ### 形状最適化を走らせる
 
-条件を置く4 verb（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads`）の続きが
+条件を置く5 verb（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads`）の続きが
 `duocad/optimize_run.py` で、結果は `add_mesh_body` で文書へ入る。詳細は [docs/TOPOPT.md](TOPOPT.md)「設計と画面」。
 
 - **MCPには同期の `run_optimization` を開けていない**（進捗・中断を運べない）。画面は WebSocket の protocol 口
@@ -278,7 +360,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py`。一覧は下の表）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py`・そこから切り出した `kernel_*.py`・共通層 `brep_*.py` と `mesh_geometry.py`。免除の一覧の正は `tests/test_boundaries.py` の `OCP_ALLOWED`）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 `topopt/`・`optimize_steps.py`・`optimize_voxels.py` は実行器 `optimize_run` と文書アダプター `optimize_acceptance` を import しない。
 
@@ -298,6 +380,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/svg_import.py` | SVG → スケッチの図形（svgelements は build123d の推移依存で既に入っている） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
+| `duocad/brep_{topology,geometry,checks,history,operations,planar}.py` | カーネルの共通層（位相・幾何量・形状検査・由来・ブーリアン・平面。`kernel` と `kernel_*` が使う） | **○** | ✗ |
 | `duocad/kernel_brep.py` | BRep保存・`inspect_solid`・箱/格子との共通体積 | **○** | ✗ |
 | `duocad/kernel_chains.py` | 辺の連なり（フィレット・面取りで1本として振る舞う辺の組）と、フィレットの事前検査 | **○** | ✗ |
 | `duocad/kernel_overflow.py` | はみ出し・貫通を吸収するフィレット（丸めの肉を別に作って足し引きする。[docs/FILLET_OVERFLOW.md](FILLET_OVERFLOW.md)）。kernel から呼ばれるだけの一方向 | **○** | ✗ |
@@ -308,7 +391,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel_shell.py` | シェル（中空化）の幾何（`shell_solid`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_thread.py` | ねじ山の幾何（山形・隙間の上下限と既定・`thread_face`。[docs/THREAD.md](THREAD.md)）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_face_edit.py` | 面の削除・面のオフセットの幾何と関門（[docs/FACE_EDIT.md](FACE_EDIT.md)）。kernel を読むだけの一方向 | **○** | ✗ |
-| `duocad/kernel_worker.py` | 面の削除・オフセットを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
+| `duocad/kernel_worker.py` | 面の編集（削除・オフセット）・フィレット・面取り・シェルを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
 | `duocad/worker_process.py` | 重い計算を子プロセスで走らせる共通の部品（起動・1行1 JSON の線・時間の上限・取り消し・作り直し。干渉チェックと面の編集が使う） | ✗ | ✗ |
 | `duocad/kernel_split.py` | ボディを平面で割る幾何（`split_by_plane`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_project.py` | ソリッドの辺・面・外形をスケッチ平面へ写す幾何（`edge_entities` / `face_edges` / `outline_entities`）と、平面との交わり（スケッチの吸着先。`section_guides`）。kernel を読むだけの一方向 | **○** | ✗ |
@@ -364,7 +447,7 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](WEB_PITFALLS.md)。
 | `web/src/commands/CommandHost.svelte` | コマンド層の骨格（起動→引数収集→プレビュー→Enter/Esc・即適用）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（Enter要否はここから導出） |
 | `web/src/{Browser,Files,Optimize,SelectionInfo}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ） |
-| `web/src/Toast.svelte` | エラーの札。`fail(message)` の1本だけ |
+| `web/src/Toast.svelte` | エラー（`fail`）と知らせ（`inform`）の札 |
 | `web/src/AiPanel.svelte` | AIパネル。文書は描かない |
 | `web/src/SettingsDialog.svelte` | 設定ダイアログ。native `<dialog>`（非モーダル）。一度決めたら触らない設定だけ |
 | `web/src/viewSettings.ts` | 画面設定のlocalStorage。クライアント側だけの設定で、文書の状態は入れない |
@@ -420,9 +503,9 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](WEB_PITFALLS.md)。
 ```
 duocad/
   .mcp.json              Claude Code向けのMCP登録（projectスコープ）
-  README.md              ← このファイル（入口）
+  README.md              外から読む人向けの案内
   MCP.md                 MCPサーバの仕様と登録手順
-  docs/                  設計判断・形状最適化ほか。索引は docs/README.md
+  docs/                  開発ガイド DEVELOPMENT.md（入口）・設計判断・形状最適化ほか。索引は docs/README.md
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール。net/ はアプリ層との接点、
                          agent/ はアプリ内AIエージェント。役割は §4 の表
   tests/                 pytest

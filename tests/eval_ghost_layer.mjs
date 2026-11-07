@@ -140,6 +140,13 @@ assert.equal(parent.children.length, 0)
 layer.clearPreview()
 assert.deepEqual(visibility, [['empty', false], ['empty', true]])
 
+// 確定すると消える相手だけが「プレビューで消える」と答える(置き換わるボディは辺・頂点を指せるまま)
+layer.showPreview([{ bodyId: 'a', geometry: cube(10) }], ['gone'])
+assert.equal(layer.removedByPreview('gone'), true, '消える相手のボディが当たりから外れない')
+assert.equal(layer.removedByPreview('a'), false, '置き換わるボディまで外れている(フィレットの辺を足せなくなる)')
+layer.clearPreview()
+assert.equal(layer.removedByPreview('gone'), false, 'プレビューを消しても当たりから外れたまま')
+
 // ローカル幽霊: 本物は隠さず、変換をグループに掛け、無関係な再配信でも組み直す
 visibility.length = 0
 const entry = { bodyId: 'b', offset: [5, 0, 0], rotate: null }

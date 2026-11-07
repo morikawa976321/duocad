@@ -17,7 +17,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import {
-  entityMidpoints, entityVisualCorners,
+  entityHandles, entityMidpoints, entityVisualCorners,
   snapSketchPoint, snapToDatumAxis,
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
@@ -43,6 +43,8 @@ import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
+import { boxOfSketchEntities, boxOfVisible, keptDirectionOffset } from './viewFraming'
+import { sightTooShallow } from './planeSight'
 import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
@@ -59,7 +61,7 @@ import {
   type SketchDraw, type SketchEntityHit, type SketchGuideHit, type SketchGuides, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
-  BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
+  BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX,
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
   HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
   EMPTY_SKETCH_HALF_WIDTH, SKETCH_FIT_MARGIN,
@@ -119,6 +121,8 @@ export function createViewport(container: HTMLElement): Viewport {
     new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.15
+  controls.zoomToCursor = true
+  controls.zoomSpeed = 2
   // 左=ウィンドウ選択(自前実装)/ 中=パン / 右=回転。左を `null` にするのは左ドラッグを
   // 丸ごとこちらへ渡すため(割り当てたままだと矩形を引く間にカメラが動く)。
   controls.mouseButtons = {
@@ -656,6 +660,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 箱が収まるよう、注視点を箱の中心へ、カメラを `offset` の向きへ引く(`offset` の長さは `HOME_VIEW_OFFSET` と同じ引き具合の係数)。 */
   function frameBox(box: THREE.Box3, offset: THREE.Vector3): void {
+    // キューブの回転は毎フレーム、始めたときの距離と行き先の向きでカメラを置き直す(`viewCubeOverlay.ts` の `stepCubeSnap`)。
+    // 止めないと、ここで合わせた視点が次の描画で戻る。
+    cube.cancelSnap()
     const center = new THREE.Vector3()
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
@@ -672,6 +679,15 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
+  /**
+   * 「今の向きのまま」寄るときの `frameBox` の `offset`。キューブの回転の途中なら、回転を行き先まで進めてから読む
+   * (途中の向きで止めると、キューブを押して選んだ向きが捨てられる)。
+   */
+  function keptOffset(): THREE.Vector3 {
+    cube.finishSnap()
+    return keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET)
+  }
+
   /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る。どれも見えていなければ動かない。 */
   function frameBodies(bodyIds: readonly string[]): void {
     const box = new THREE.Box3()
@@ -680,9 +696,37 @@ export function createViewport(container: HTMLElement): Viewport {
       if (mesh !== undefined && mesh.visible) box.expandByObject(mesh)
     }
     if (box.isEmpty()) return
-    const offset = camera.position.clone().sub(controls.target)
-    if (offset.lengthSq() === 0) offset.copy(HOME_VIEW_OFFSET)
-    frameBox(box, offset.setLength(HOME_VIEW_OFFSET.length()))
+    frameBox(box, keptOffset())
+  }
+
+  /**
+   * 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。
+   * 隠してある本物(`setBodyVisible`)は数えず、その代わりに出ている表示を数える: プレビューの幽霊(`root` の中)と、
+   * `?voxel=1` のボクセル(`optimizeDebug.object`。`root` の外)。
+   */
+  function frameVisible(): void {
+    const box = boxOfVisible([...root.children, sketchRoot, optimizeDebug.object])
+    if (!box.isEmpty()) {
+      frameBox(box, keptOffset())
+    } else if (activeSketchId !== null) {
+      lookAtSketch(activeSketchId, { emptyDocument: true })
+    } else {
+      camera.up.copy(WORLD_UP)
+      frameBox(new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3().setScalar(BASE_EXTENT * 2)), HOME_VIEW_OFFSET)
+    }
+  }
+
+  /** スケッチ `sketchId` の図形 `entityIds` が収まる所へ、今の向きのまま寄る(取り込んだ図形を見せる)。 */
+  function frameSketchEntities(sketchId: string, entityIds: readonly string[]): void {
+    const scene = sketchLayer.get(sketchId)
+    if (!scene) return
+    const lines = scene.handleLines.map((line) => ({
+      entityId: line.userData.entityId,
+      polylineWorld: line.userData.polylineWorld as readonly THREE.Vector3[] | undefined,
+    }))
+    const box = boxOfSketchEntities(lines, new Set(entityIds))
+    if (box.isEmpty()) return
+    frameBox(box, keptOffset())
   }
 
   function setFov(deg: number): void {
@@ -763,6 +807,13 @@ export function createViewport(container: HTMLElement): Viewport {
   let selectedBodyIds = new Set<string>()
   /** ホバーを持ち主の単位で光らせるか(`setHoverGrain`)。 */
   let hoverGrain = { body: false, entity: false }
+  let browserHover: string | null = null
+
+  function setBrowserHover(bodyId: string | null): void {
+    if (browserHover === bodyId) return
+    browserHover = bodyId
+    applyFaceMaterials()
+  }
 
   /** 形状最適化(第3のモード)の役割。モードを抜けたら空にする(`setOptimizeState(null)`)。 */
   let bodyRoles = new Map<string, 'preserve' | 'exclude'>()
@@ -782,7 +833,8 @@ export function createViewport(container: HTMLElement): Viewport {
         const state: FaceMaterialState = hitAsBody || selectedFaceKeys.has(key) ? 'user' : 'plain'
         const role: OptimizeFaceRole = fixtureFaceKeys.has(key) ? 'fixture' : bodyRole
         const isHovered =
-          hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index)
+          browserHover === bodyId ||
+          (hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index))
         if (entry.body.setFaceColor(face.index, faceColorFor(role, state, isHovered))) invalidate()
       }
     }
@@ -981,6 +1033,7 @@ export function createViewport(container: HTMLElement): Viewport {
     clipPlanes: section.clipPlanes,
     sphereNear: (sphere, x, y, radiusPx, project) => occlusion.sphereNear(sphere, x, y, radiusPx, project),
     invalidate,
+    hiddenByPreview: (bodyId) => ghostLayer.removedByPreview(bodyId),
   })
   scene.add(features.object)
 
@@ -1318,6 +1371,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const previous = cameraBeforeSketch
     cameraBeforeSketch = null
     if (previous !== null && previous.framedAtEntry) {
+      cube.cancelSnap() // `frameBox` と同じ理由
       camera.position.copy(previous.position)
       camera.up.copy(previous.up)
       controls.target.copy(previous.target)
@@ -1328,8 +1382,8 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
-  /** スケッチ平面と視線の交点を (u,v) で返す(平面がカメラの裏なら null)。 */
-  function planePointAt(offsetX: number, offsetY: number): { u: number; v: number } | null {
+  /** スケッチ平面と視線の交点を (u,v) で返す(平面がカメラの裏なら null。視線が平面に浅すぎれば 'shallow')。 */
+  function planeHitAt(offsetX: number, offsetY: number): { u: number; v: number } | 'shallow' | null {
     if (activeSketchId === null) return null
     const target = sketchLayer.get(activeSketchId)
     if (!target) return null
@@ -1337,12 +1391,40 @@ export function createViewport(container: HTMLElement): Viewport {
     const frame = target.frame
     const origin = frameVector(frame.origin)
     const normal = frameVector(frame.normal).normalize()
+    if (sightTooShallow(ray.direction, normal)) return 'shallow'
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin)
     const hit = ray.intersectPlane(plane, new THREE.Vector3())
     if (hit === null) return null
     const delta = hit.sub(origin)
     // `frame.u` / `frame.v` は正規化しない(`toWorld` と同じ扱い)。
     return { u: delta.dot(frameVector(frame.u)), v: delta.dot(frameVector(frame.v)) }
+  }
+
+  function planePointAt(offsetX: number, offsetY: number): { u: number; v: number } | null {
+    const hit = planeHitAt(offsetX, offsetY)
+    return hit === 'shallow' ? null : hit
+  }
+
+  /**
+   * 視線が平面に浅すぎて生の (u,v) が決まらない(`planeHitAt` が 'shallow')ときに、それでも点として渡せる当たりの座標。
+   * 座標が視線に依らず決まるもの = 図形の名前つきの点・角・交点・中点(`snapAt`)と原点。線の途中と軸は視線で決まるので null。
+   * クリック(`resolveHit`)とホバー(`updateSketchPointer`)が同じ答えを使う。
+   */
+  function sightFreePoint(
+    entity: SketchEntityHit | null,
+    datum: { name: DatumName; at: readonly [number, number] } | null,
+  ): { u: number; v: number } | null {
+    const target = activeSketchId === null ? undefined : sketchLayer.get(activeSketchId)
+    if (!target) return null
+    if (entity === null) return datum?.name === 'origin' ? { u: datum.at[0], v: datum.at[1] } : null
+    if (entity.snapAt === undefined) {
+      // 名前つきの点の座標は図形から引く。図形が見つからないと `snappedSketchUv` は格子に丸めた (0, 0) を返してしまう。
+      const handle = target.handles.find((item) => item.entityId === entity.entityId)
+      if (entity.point === null || handle === undefined) return null
+      if (!entityHandles(handle.kind, handle.params).some((item) => item.key === entity.point)) return null
+    }
+    const [u, v] = snappedSketchUv(0, 0, entity, target)
+    return { u, v }
   }
 
   /**
@@ -1445,7 +1527,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * その画素で当たるスケッチの図形(アクティブなスケッチだけ)。点が先・角/交点が次・中点がその次・辺が最後:
    * 点・角・交点は必ずどれかの辺の上に乗っているので、辺を先に見ると掴めない。当たり半径は画面上の画素
-   * (`edgeAt` / `vertexAt` と同じ `pickPointsAt` / `pickLinesAt`)。
+   * (`pickPointsAt` / `pickLinesAt`)。
    */
   function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
     if (activeSketchId === null) return null
@@ -1679,6 +1761,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // Z軸を回転の極として使い続ける(`WORLD_UP` 参照)ので、camera.up をそこから逸らすとキューブの見た目
     // (`cubeActive.up` が camera.up を写す)と実際の回転軸がずれる。`frame.v` を直接使うと任意面や XY 平面で
     // ずれる。真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ ±Y へ差し替わる。
+    cube.cancelSnap() // `frameBox` と同じ理由(回転の途中だと、ここで置いた視点が次の描画で戻る)
     camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)
@@ -2045,14 +2128,18 @@ export function createViewport(container: HTMLElement): Viewport {
   }
   // クリック(押した位置からほとんど動いていない)だけを選択として扱う。
   // 動いた場合は OrbitControls の視点回転であって選択ではない。
-  let downAt = 0
   let downX = 0
   let downY = 0
   let downValid = false
+  // どのボタンでも最後に押した位置。右・中ボタンの視点操作が始まったかの判定はここから測る(`downX/downY` は左だけ)。
+  let pressX = 0
+  let pressY = 0
 
   function onPointerDown(event: PointerEvent): void {
     // 新しいポインタ操作が来たら、進行中のキューブ視点アニメーションは中断してよい(タスク仕様)。
     cube.cancelSnap()
+    pressX = event.offsetX
+    pressY = event.offsetY
     if (event.button !== 0) return
     // キューブの内側で始まった左ボタン押下はキューブが引き取る(ピック・矩形選択の開始へ漏らさない)
     if (cube.pointerDown(event)) return
@@ -2062,7 +2149,6 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.style.cursor = 'grabbing'
       return
     }
-    downAt = performance.now()
     downX = event.offsetX
     downY = event.offsetY
     downValid = true
@@ -2087,7 +2173,6 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     downValid = false
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
-    const elapsed = performance.now() - downAt
     // 矩形を引いていたならウィンドウ選択(クリックにはしない)。引いた向きは見ない。
     if (band.active()) {
       const rect = band.rect(downX, downY, event.offsetX, event.offsetY)
@@ -2095,7 +2180,7 @@ export function createViewport(container: HTMLElement): Viewport {
       boxSelectListener?.({ ...collectInBox(rect), mode: modeOf(event) })
       return
     }
-    if (moved > CLICK_MOVE_LIMIT_PX || elapsed > CLICK_TIME_LIMIT_MS) return
+    if (moved > CLICK_MOVE_LIMIT_PX) return
     pickListener?.({ ...resolveHit(event.offsetX, event.offsetY), mode: modeOf(event) })
   }
 
@@ -2128,17 +2213,21 @@ export function createViewport(container: HTMLElement): Viewport {
     const solidOnly = activeSketchId !== null && solidPickInSketch
     if (activeSketchId !== null && !solidOnly) {
       const region = regionAt(offsetX, offsetY)
-      const plane = planePointAt(offsetX, offsetY)
+      const planeHit = planeHitAt(offsetX, offsetY)
+      const plane = planeHit === 'shallow' ? null : planeHit
       // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
       // 描くコマンドが起動している間はそちらが優先(判断は `App.svelte`)。
       const datum = sketchDatumAt(offsetX, offsetY, plane)
       const snap = sketchSnapAt(offsetX, offsetY)
+      const fixed = planeHit === 'shallow' ? sightFreePoint(snap.entity, datum) : null
+      const point = plane ?? fixed
       return {
         ...nothing,
         region,
         sketchEntity: snap.entity,
         sketchGuide: snap.guide,
-        point: plane === null ? null : { sketchId: activeSketchId, ...plane },
+        point: point === null ? null : { sketchId: activeSketchId, ...point },
+        pointRefused: planeHit === 'shallow' && fixed === null ? 'shallow' : null,
         datum: datum?.name ?? null,
         datumAt: datum?.at ?? null,
       }
@@ -2265,12 +2354,22 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverAt = { x: event.offsetX, y: event.offsetY }
     // 視点回転中は取れるものの予告を出さない。境目は `onPointerUp` の moved 判定と揃える。`downValid` ではなく
     // `buttons` で見る(canvasの外でボタンを離されると `pointerup` が来ず、`downValid` が立ったままになる)。
+    orbiting = event.buttons !== 0 && Math.hypot(event.offsetX - pressX, event.offsetY - pressY) > CLICK_MOVE_LIMIT_PX
     const dragged = Math.hypot(event.offsetX - downX, event.offsetY - downY)
-    orbiting = event.buttons !== 0 && dragged > CLICK_MOVE_LIMIT_PX
     // 左ボタンを押したまま一定距離を越えたらウィンドウ選択。`buttons` も見るのは、canvasの外で離されたとき帯が出たままになるのを防ぐため。
-    if (downValid && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
+    // タッチの1本指ドラッグは OrbitControls が視点回転に使う(`mouseButtons` はマウスにしか効かない)ので、帯は出さない。
+    if (downValid && event.pointerType !== 'touch' && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
       band.show(downX, downY, event.offsetX, event.offsetY)
     }
+    updateSketchPointer(event.offsetX, event.offsetY)
+  }
+
+  /**
+   * カーソル位置の幽霊・スナップ・十字を引き直す。ポインタが動いたときと、動かないままカメラ(ホイール・減衰)や
+   * 取り寄せた当たりが変わったとき(`updateHover`)に呼ぶ。
+   */
+  function updateSketchPointer(offsetX: number, offsetY: number): void {
+    sketchPointerProbe = hoverProbeKey({ x: offsetX, y: offsetY })
     let planePoint: { u: number; v: number } | null = null
     let sketchHit: SketchEntityHit | null = null
     let datumAt: readonly [number, number] | null = null
@@ -2280,19 +2379,26 @@ export function createViewport(container: HTMLElement): Viewport {
         planeMoveListener(null, null, null, null)
       } else {
         // `sketchSnapAt` / `sketchDatumAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
-        planePoint = planePointAt(event.offsetX, event.offsetY)
-        const snap = sketchSnapAt(event.offsetX, event.offsetY)
+        planePoint = planePointAt(offsetX, offsetY)
+        const snap = sketchSnapAt(offsetX, offsetY)
         sketchHit = snap.entity
         guideHit = snap.guide
-        datumAt =
-          sketchHit === null && guideHit === null
-            ? (sketchDatumAt(event.offsetX, event.offsetY, planePoint)?.at ?? null)
-            : null
+        const datum = sketchHit === null && guideHit === null ? sketchDatumAt(offsetX, offsetY, planePoint) : null
+        datumAt = datum?.at ?? null
+        if (planePoint === null && planeHitAt(offsetX, offsetY) === 'shallow') planePoint = sightFreePoint(sketchHit, datum)
         planeMoveListener(planePoint, sketchHit, datumAt, guideHit)
         grid.followCursor(planePoint)
       }
     }
-    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit, datumAt, guideHit)
+    updateSketchCursor(offsetX, offsetY, planePoint, sketchHit, datumAt, guideHit)
+  }
+
+  // 帯を引いている間の Esc はドラッグの取り消し(離しても矩形選択にならない)。選択の全解除など、ほかの Esc の働きは起こさない。
+  function onBandEscape(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || event.isComposing || !downValid || !band.active()) return
+    downValid = false
+    band.hide()
+    event.stopImmediatePropagation()
   }
 
   /** ポインタがcanvasから出た。強調を残さない(戻ってくるまで指せるものは無い)。 */
@@ -2322,6 +2428,7 @@ export function createViewport(container: HTMLElement): Viewport {
   renderer.domElement.addEventListener('pointerleave', onPointerLeave)
   // ドラッグがOSに横取りされた場合(`pointerup` が来ない)。`pointerleave` と同じ後始末でよい。
   renderer.domElement.addEventListener('pointercancel', onPointerLeave)
+  window.addEventListener('keydown', onBandEscape, true)
 
   // ポインタ・ホイールは公開口を通らずに見た目(ホバー・ビューキューブ・断面のつまみ・グリッド)を変える
   for (const type of ['pointerdown', 'pointerup', 'pointermove', 'pointerleave', 'pointercancel', 'wheel'] as const) {
@@ -2340,6 +2447,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const observer = new ResizeObserver(() => {
     invalidate()
     applySize()
+    // 描画バッファの作り直しは中身を消す。次の rAF まで待つと、消えた絵がそのフレームに表示される。
+    renderIfNeeded()
   })
   observer.observe(container)
   applySize()
@@ -2355,21 +2464,29 @@ export function createViewport(container: HTMLElement): Viewport {
     if (near.length > 0) pickDataWantedListener(near)
   }
 
-  function updateHover(): void {
-    const point = orbiting ? null : hoverAt
+  // 最後に `updateSketchPointer` を呼んだときの `hoverProbeKey`。
+  let sketchPointerProbe = ''
+
+  function hoverProbeKey(point: { x: number; y: number } | null): string {
     // カメラの値は丸めて鍵にする: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム位置と姿勢を
     // 1e-8 ほど揺らし続け、そのままだと止まっていても毎フレーム当たりを解き直す(`cameraMovedSinceRender` と同じ揺れ)。
     // 0 の近くで揺れる成分は `toFixed` だと `-0.000000` と `0.000000` に分かれるので、丸めた整数(-0 は 0 に)で鍵にする。
     const fixed = (values: number[]) => values.map((value) => Math.round(value * 1e6) + 0).join(',')
-    const probe =
-      point === null
-        ? ''
-        : `${pickGeneration},${point.x},${point.y},` +
+    return point === null
+      ? ''
+      : `${pickGeneration},${point.x},${point.y},` +
           `${fixed(camera.position.toArray())},${fixed(camera.quaternion.toArray())},` +
           // `zoom` も入れる: 正投影のドリーは `zoom` だけを動かすので、無いとホイールで寄っても当たるものが変わらない。
           `${camera.zoom}`
+  }
+
+  function updateHover(): void {
+    const point = orbiting ? null : hoverAt
+    const probe = hoverProbeKey(point)
     if (probe === hoverProbe) return
     hoverProbe = probe
+    // ポインタが動かないままカメラが動いた(ホイール)ときの幽霊・吸着マーカー。ポインタが動いたときは `onPointerMove` が引き直し済み。
+    if (point !== null && activeSketchId !== null && probe !== sketchPointerProbe) updateSketchPointer(point.x, point.y)
     if (point !== null && (activeSketchId === null || solidPickInSketch)) requestPickData(point.x, point.y)
     const next = point === null ? null : resolveHit(point.x, point.y)
     // スケッチモードでは図形と領域が一緒に返る: 図形が取れるときは領域を光らせない
@@ -2377,7 +2494,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const face = next?.hit ?? null
     const edge = next?.edge ?? null
     const vertex = next?.vertex ?? null
-    const region = next?.sketchEntity || next?.sketchGuide ? null : (next?.region ?? null)
+    // 点を待つ間は、領域の上を押しても点になる(領域は選ばれない)ので光らせない。
+    const region = sketchCursorWanted || next?.sketchEntity || next?.sketchGuide ? null : (next?.region ?? null)
     const plane = next?.plane ?? null
 
     const nextFaceKey = face === null ? '' : refKey(face.bodyId, face.faceIndex)
@@ -2494,6 +2612,10 @@ export function createViewport(container: HTMLElement): Viewport {
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     grid.updateUniforms()
     section.update()
+    renderIfNeeded()
+  }
+
+  function renderIfNeeded(): void {
     if (needsRender || cameraMovedSinceRender()) {
       needsRender = false
       headlightRig.follow(controls.target)
@@ -2544,6 +2666,7 @@ export function createViewport(container: HTMLElement): Viewport {
     viewResolution() {
       return { ...resolution.applied() }
     },
+    reapplyResolution: resolution.reapply,
     setFaceCulling: resolution.setFaceCulling,
     sketchPolylineCounts() {
       const counts: Record<string, number[]> = {}
@@ -2583,6 +2706,7 @@ export function createViewport(container: HTMLElement): Viewport {
       features.groupChains(on)
     },
     setHoverGrain,
+    setBrowserHover,
     edgeChain: features.chainOf,
     setEdgeChains: features.setChains,
     onEdgeChainWanted: features.onChainWanted,
@@ -2601,7 +2725,9 @@ export function createViewport(container: HTMLElement): Viewport {
     drawCalls: () => lastDrawCalls,
     renderCount: () => renderCount,
     hoveredRef() {
+      const faceIndex = browserHover === null ? undefined : bodies.get(browserHover)?.body.faces[0]?.index
       return {
+        body: browserHover !== null && bodies.has(browserHover) ? browserHover : null,
         face: hoverFace,
         edge: hoverEdge,
         vertex: hoverVertex,
@@ -2609,7 +2735,9 @@ export function createViewport(container: HTMLElement): Viewport {
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
         datum: hoverDatum,
-        color: hoverColorNow(),
+        color: browserHover !== null && faceIndex !== undefined
+          ? paintedFaceColor({ bodyId: browserHover, faceIndex })
+          : hoverColorNow(),
       }
     },
     showPreview: ghostLayer.showPreview,
@@ -2625,6 +2753,8 @@ export function createViewport(container: HTMLElement): Viewport {
       frameToContent()
     },
     frameBodies,
+    frameVisible,
+    frameSketchEntities,
     resetGrid() {
       grid.rescale(contentBoxForGrid(), true)
     },
@@ -2649,6 +2779,7 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointercancel', onPointerLeave)
+      window.removeEventListener('keydown', onBandEscape, true)
       document.removeEventListener('visibilitychange', invalidate)
       overlayWatcher.disconnect()
       cube.dispose()

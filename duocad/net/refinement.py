@@ -43,6 +43,10 @@ class BackgroundRefinement:
         #: 後始末(測った面を覚えて配る)のタスク全部。`settled` はこれが空になるまで待つ
         self._tasks: set = set()
         self._refining: dict = {}  # body_id -> 測っている(測る予定の)形
+        #: id(元の形) -> (元の形, 写し)。ワーカーだけが触る写しを持ち回り、ズームのたびに全ボディを写し直さない
+        #: (27 部品で 1 回 60〜90 ms がループ上)。測った後の写しは `tessellate_faces` が三角形を消すので、元の形と同じ状態に戻っている。
+        #: 文書から消えた・差し替わった形の写しは次の `schedule` で捨てる。
+        self._copies: dict = {}
         self._again = False
 
     @property
@@ -62,13 +66,23 @@ class BackgroundRefinement:
             return
         if self._worker is None:
             self._worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-refine")
-        copies = [(body_id, shape, kernel.copy_shape(shape), groups, closed) for body_id, shape, groups, closed in jobs]
+        alive = {id(body.shape) for body in self._session.document.bodies if body.shape is not None}
+        for key in [key for key in self._copies if key not in alive]:
+            del self._copies[key]
+        copies = [(body_id, shape, self._copy_of(shape), groups, closed) for body_id, shape, groups, closed in jobs]
         self._refining = {body_id: shape for body_id, shape, _groups, _closed in jobs}
         loop = asyncio.get_running_loop()
         computation = loop.run_in_executor(self._worker, _measure_copies, copies)
         self._current = loop.create_task(self._finish(computation))
         self._tasks.add(self._current)
         self._current.add_done_callback(self._tasks.discard)
+
+    def _copy_of(self, shape: object) -> object:
+        held = self._copies.get(id(shape))
+        if held is None or held[0] is not shape:
+            held = (shape, kernel.copy_shape(shape))
+            self._copies[id(shape)] = held
+        return held[1]
 
     async def _finish(self, computation: "asyncio.Future") -> None:
         try:

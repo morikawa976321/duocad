@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from .. import brep_checks, kernel, kernel_extrude, kernel_sketch, naming
+from .. import brep_checks, brep_topology, kernel, kernel_extrude, kernel_sketch, naming
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -84,6 +84,7 @@ def extrude(
         VERB_EXTRUDE,
         _region_build(faces, distance, mode, normal, taper),
         lambda: kernel_extrude.extrude_regions(faces, distance, "new", normal, taper=taper)["shape"],
+        unreached_hint=kernel_extrude.OUTWARD_CUT_HINT if distance > 0 else "",
     )
     operation = doc.log.append(
         VERB_EXTRUDE,
@@ -490,6 +491,8 @@ def _enter_extrude(
     `body_id` だけは引数のまま(どの Body へ足す/から引くかであって、対象集合ではない)。
     """
     kind, items = selection.require_extrude_targets(document)
+    cutting = str(mode) == "cut"
+    lumps_before = _lump_counts(document) if cutting else {}
     if kind == "face":
         operation = extrude_faces(
             document, items, float(distance), mode=str(mode), body_id=body_id, taper=float(taper)
@@ -497,9 +500,31 @@ def _enter_extrude(
     else:
         refs = [RegionRef.from_dict(item) for item in items]
         operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id, taper=float(taper))
-    return {
+    out = {
         "body_id": operation.args["body_id"],
         "distance": float(distance),
         "mode": str(mode),
         **changed_bodies(operation),
     }
+    split = _split_by_cut(document, out["changed_bodies"], lumps_before) if cutting else []
+    if split:
+        # 切り取りで割れても断らず、気づけるようにする(`Session._after_logged_verb` が確定のときだけ警告のトーストへ積む)。
+        # 再生・やり直しは入口を通らないので出ない。
+        out["warning"] = "。".join(split)
+    return out
+
+
+def _lump_counts(doc: Document) -> Dict[BodyId, int]:
+    """ボディごとの離れた塊(ソリッド)の数。形の無いボディ(メッシュ)は数えない。"""
+    return {body.id: len(brep_topology.split_solids(body.shape)) for body in doc.bodies if body.shape is not None}
+
+
+def _split_by_cut(doc: Document, changed: Sequence[BodyId], before: Dict[BodyId, int]) -> List[str]:
+    """切り取りで塊が増えたボディごとの警告の文(増えていなければ空)。"""
+    found = []
+    for body_id in changed:
+        body = doc.get_body(body_id)
+        lumps = len(brep_topology.split_solids(body.shape))
+        if lumps >= 2 and lumps > before.get(body_id, 1):
+            found.append(f"切り取りで「{body.name}」に離れた塊が{lumps}個入った(1つのボディのまま。面のオフセット・面の削除は掛けられない)")
+    return found

@@ -1,5 +1,5 @@
 """STL書き出し(MCPツール `export_stl`)は**固定の粗さ**(`io_step.STL_DEVIATION`)で、
-画面と同じ経路で測る —— 同じ粗さを土台に置けば三角形はビット単位で一致する。
+画面と同じ経路で測る —— 同じ粗さを画面に置けば三角形はビット単位で一致する。
 
 落ちたら、書き出したSTLが画面で確かめた形と別の計算になっている(角度偏差・呼ぶ関数・
 Bodyのまとめ方のどれかが画面の経路とずれた)か、粗さが土台に引きずられている。
@@ -96,9 +96,15 @@ def _view_triangles(session: Session, body_id: str) -> np.ndarray:
     return np.concatenate(chunks).astype(np.float32)
 
 
+def _show_at(session: Session, deviation: float) -> None:
+    """画面の見え方が届いた状態にする(届く前の粗さは外接箱から決まるので、粗さを指して比べる)。"""
+    session.view._view_resolution = (deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
+
+
 def test_the_stl_holds_exactly_the_triangles_the_view_shows(tmp_path):
-    """**土台を書き出しの固定値に合わせれば**、画面の三角形とSTLはビット単位で同じ。"""
+    """**画面の粗さを書き出しの固定値に合わせれば**、画面の三角形とSTLはビット単位で同じ。"""
     session = Session(io_step.STL_DEVIATION)
+    _show_at(session, io_step.STL_DEVIATION)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
     view = _view_triangles(session, "part")
 
@@ -114,6 +120,7 @@ def test_the_stl_does_not_follow_the_session_baseline(tmp_path):
     落ちたら、書き出しが画面の設定を見に行っている(曲面のある形で三角形数が土台に追随する)。
     """
     session = Session(0.2)
+    _show_at(session, 0.2)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
 
     path = tmp_path / "part.stl"
@@ -125,6 +132,7 @@ def test_the_stl_does_not_follow_the_session_baseline(tmp_path):
 def test_several_b_rep_bodies_are_written_one_by_one_as_the_view_measures_them(tmp_path):
     """画面はBodyごとに測る。書き出しも1つのcompoundへまとめて測り直さない。"""
     session = Session(io_step.STL_DEVIATION)
+    _show_at(session, io_step.STL_DEVIATION)
     session.document.add_body(Body(id="a", name="a", kind="solid", shape=_holed_box()))
     moved = kernel.translate_shape(_holed_box(), 60.0, 0.0, 0.0)
     session.document.add_body(Body(id="b", name="b", kind="solid", shape=moved))
@@ -189,6 +197,7 @@ def test_a_b_rep_with_pole_triangles_is_written_without_the_zero_area_ones(tmp_p
     拒まれてこれらの形が書き出せない(ファイルが作られない)か、除いたことで STL が閉じなくなっている。"""
     shape = _POLE_SHAPES[name]()
     session = Session(io_step.STL_DEVIATION)
+    _show_at(session, io_step.STL_DEVIATION)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=shape))
     view = _view_triangles(session, "part")
     zero_area = degenerate_mask(view.astype(np.float64))

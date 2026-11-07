@@ -1,11 +1,11 @@
-"""面の編集・フィレット・面取りを常駐の子プロセスで計算する口。方式と実測は docs/FACE_EDIT.md と docs/FILLET_OVERFLOW.md。
+"""面の編集・フィレット・面取り・シェルを常駐の子プロセスで計算する口。方式と実測は docs/FACE_EDIT.md と docs/FILLET_OVERFLOW.md。
 
 OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒の計算で主スレッドが 3.09 秒止まった)、
 `BRepOffset_MakeOffset` はプロセスごと落ちることがある(角ばった実物で 21 件)。同じプロセスで計算すると、その間サーバ全体
 (画面・MCP)が止まる・落ちるので、子に計算させ、親は返事を待つ(待つ間は GIL を放す)。子の起動・線・時間の上限・作り直しは
-`worker_process` の共通の部品で、ここは要求の形と子での計算だけを持つ。
+`worker_process` の共通の部品で、ここは要求の形・子での計算・本番と予備の寿命を持つ。
 
-- 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
+- 本番の子は初回の呼び出しで立て、計算が終わっても残す。サーバの先立てを呼んだプロセスだけ、続けて予備を1本立てる。
 - 要求は {"op":"face_edit"・"blend_edges"・"shell","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
   {"shape":<base64>,"provenance":{...},"kept":[[結果の面の添字, 入力の面の添字], ...]}(フィレット・面取りは "volume_before"・
   "volume_after"、面の編集は "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
@@ -13,7 +13,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
 - 実行は同時に1件。期限切れ・異常終了・取り消しは子を止めて `ValueError`(呼び出し側は結果を採らず、文書もログも変えない)、
-  次の呼び出しで立て直す。形を断ったときはその派生の `Refused`、期限切れは `TimedOut`。
+  起動済みの予備へ差し替える。予備が無ければ次の呼び出しで立て直す。形を断ったときはその派生の `Refused`、期限切れは `TimedOut`。
 """
 from __future__ import annotations
 
@@ -53,7 +53,75 @@ _WAITING_FOREGROUND = 0
 _PREVIEW: ContextVar[Optional[threading.Event]] = ContextVar("kernel_preview", default=None)
 _NEW_INPUT: ContextVar[bool] = ContextVar("kernel_new_input", default=False)
 _WORKER: Optional[worker_process.WorkerProcess] = None
+_SPARE: Optional[worker_process.WorkerProcess] = None
+_STARTING_SPARE: Optional[worker_process.WorkerProcess] = None
+_SPARES_ENABLED = False
+_GENERATION = 0
 _CHILD_COMMAND = [sys.executable, "-c", "from duocad import kernel_worker; kernel_worker.child_main()"]
+
+
+class _KernelWorker(worker_process.WorkerProcess):
+    def __init__(self) -> None:
+        super().__init__(_CHILD_COMMAND)
+        self.generation = _GENERATION
+
+    def _spawn(self) -> None:
+        with _CONDITION:
+            if self.generation != _GENERATION:
+                raise worker_process.WorkerFailure("計算用の子プロセスを停止した")
+            super()._spawn()
+
+
+def _fill_spare() -> None:
+    global _SPARE, _STARTING_SPARE
+    if _SPARE is not None and not _SPARE.is_alive():
+        _SPARE.close()
+        _SPARE = None
+    if not _SPARES_ENABLED or _SPARE is not None or _STARTING_SPARE is not None:
+        return
+    if _WORKER is None or not _WORKER.is_alive():
+        return
+    worker = _KernelWorker()
+    _STARTING_SPARE = worker
+    try:
+        threading.Thread(target=_warm_spare, args=(worker,), name="kernel-worker-spare", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        _STARTING_SPARE = None
+        worker.close()
+
+
+def _warm_spare(worker: _KernelWorker) -> None:
+    global _SPARE, _STARTING_SPARE
+    ready = False
+    try:
+        worker.request({"op": "ping"}, 60.0)
+        ready = True
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        with _CONDITION:
+            if ready and worker.generation == _GENERATION and _SPARES_ENABLED and worker.is_alive():
+                _SPARE = worker
+            else:
+                worker.close()
+            if _STARTING_SPARE is worker:
+                _STARTING_SPARE = None
+            _CONDITION.notify_all()
+
+
+def _restart_worker(worker: worker_process.WorkerProcess) -> None:
+    global _WORKER, _SPARE
+    with _CONDITION:
+        worker.restart()
+        if _WORKER is not worker:
+            return
+        spare, _SPARE = _SPARE, None
+        if spare is not None:
+            if spare.is_alive():
+                _WORKER = spare
+            else:
+                spare.close()
+        _fill_spare()
 
 
 @contextmanager
@@ -93,10 +161,12 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
     preview = _PREVIEW.get()
     cancel = preview if preview is not None else threading.Event()
 
-    def check():
+    def check(queued=False):
         if cancel.is_set():
             raise ValueError(f"{verb}: プレビューを取り消した")
         if time.monotonic() >= deadline:
+            if queued:
+                raise TimedOut(f"{verb}: 別の計算が実行中のため、{timeout:.0f} 秒以内に始められなかった")
             raise TimedOut(f"{verb}: {timeout:.0f} 秒以内に返事が無かった")
 
     with _CONDITION:
@@ -107,9 +177,10 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
                 _ACTIVE.set()
         try:
             while True:
-                check()
+                check(queued=_ACTIVE is not None)
                 if _ACTIVE is None and (preview is None or _WAITING_FOREGROUND == 0):
                     _ACTIVE, _ACTIVE_PREVIEW = cancel, preview is not None
+                    generation = _GENERATION
                     break
                 _CONDITION.wait(timeout=min(0.05, max(0.0, deadline - time.monotonic())))
         finally:
@@ -122,26 +193,33 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
         if known is not None:
             message["volume"] = known  # 子が入力の体積を積分し直さない(733 面で 0.15 秒)
         check()
-        if _WORKER is None:
-            _WORKER = worker_process.WorkerProcess(_CHILD_COMMAND)
+        with _CONDITION:
+            if generation != _GENERATION:
+                raise ValueError(f"{verb}: 計算用の子プロセスを停止した")
+            if _WORKER is None or (isinstance(_WORKER, _KernelWorker) and _WORKER.generation != _GENERATION):
+                _WORKER = _KernelWorker()
+            elif _WORKER.starts and not _WORKER.is_alive():
+                _restart_worker(_WORKER)
+            worker = _WORKER
         try:
             remaining = None if timeout is None else max(0.0, deadline - time.monotonic())
-            result = _WORKER.request(message, remaining, cancel=cancel)
+            result = worker.request(message, remaining, cancel=cancel)
             if cancel.is_set() or time.monotonic() >= deadline:
-                _WORKER.restart()
+                _restart_worker(worker)
             check()  # 返信と同時に取り消された結果も採らない
         except worker_process.WorkerRemoteError as error:
             raise ValueError(f"{verb}: OCCT raised {error.reason}") from None
         except worker_process.WorkerCancelled:
-            _WORKER.restart()
+            _restart_worker(worker)
             raise ValueError(f"{verb}: プレビューを取り消した") from None
         except worker_process.WorkerError as error:
-            _WORKER.restart()
+            _restart_worker(worker)
             if isinstance(error, worker_process.WorkerTimeout):
                 raise TimedOut(f"{verb}: {timeout:.0f} 秒以内に返事が無かった") from None
             raise ValueError(f"{verb}: {error.reason}") from None
     finally:
         with _CONDITION:
+            _fill_spare()
             _ACTIVE, _ACTIVE_PREVIEW = None, False
             _CONDITION.notify_all()
     if "refused" in result:
@@ -156,36 +234,56 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
 
 
 def warm_up_in_background() -> None:
-    """子を裏で先に立てておく(起動に約 1.6 秒かかり、最初のフィレット・面取り・面の編集の応答がその分遅れていた)。
-    子は一度立てたら残すので、立てる時刻が早まるだけ。立てている間の要求は待ち、失敗したら次の `run` が立て直す。"""
-    threading.Thread(target=_warm_up, name="kernel-worker-warm-up", daemon=True).start()
+    """本番の子を裏で先に立て、その後に予備を1本立てる。この口を呼んだプロセスだけ予備を持つ。
 
-
-def _warm_up() -> None:
-    global _WORKER, _ACTIVE, _ACTIVE_PREVIEW
+    本番の起動中の要求は待つ。予備の起動は要求を待たせない。起動の失敗時は次の `run` が立て直す。
+    """
+    global _SPARES_ENABLED, _WORKER, _ACTIVE, _ACTIVE_PREVIEW
     with _CONDITION:
-        if _WORKER is not None or _ACTIVE is not None:
+        _SPARES_ENABLED = True
+        if _ACTIVE is not None:
             return
+        if _WORKER is not None and _WORKER.is_alive():
+            _fill_spare()
+            return
+        if _WORKER is None:
+            _WORKER = _KernelWorker()
         _ACTIVE, _ACTIVE_PREVIEW = threading.Event(), False
-    worker = worker_process.WorkerProcess(_CHILD_COMMAND)
+        try:
+            threading.Thread(target=_warm_up, args=(_WORKER,), name="kernel-worker-warm-up", daemon=True).start()
+        except Exception:  # noqa: BLE001
+            _ACTIVE, _ACTIVE_PREVIEW = None, False
+            _CONDITION.notify_all()
+
+
+def _warm_up(worker: worker_process.WorkerProcess) -> None:
+    global _ACTIVE, _ACTIVE_PREVIEW
     try:
         worker.request({"op": "ping"}, 60.0)
-        _WORKER = worker
     except Exception:  # noqa: BLE001  立てられなくても、次の `run` が立て直す
-        worker.close()
+        with _CONDITION:
+            worker.close()
     finally:
         with _CONDITION:
+            _fill_spare()
             _ACTIVE, _ACTIVE_PREVIEW = None, False
             _CONDITION.notify_all()
 
 
 def stop() -> None:
-    """子を止める(終了時。次の `run` で立て直す)。"""
+    """本番・予備・起動途中の子を止める(次の `run` は予備なしで立て直す)。
+
+    計算中でも待たずに止める。期限なしの計算(シェル・再生)を待つと終了が計算の長さだけ延びる。
+    待っていた側は `WorkerError` を受け、`run` が `ValueError` にする。
+    """
+    global _WORKER, _SPARE, _STARTING_SPARE, _SPARES_ENABLED, _GENERATION
     with _CONDITION:
-        while _ACTIVE is not None:
-            _CONDITION.wait(timeout=0.05)
-        if _WORKER is not None:
-            _WORKER.close()
+        _SPARES_ENABLED = False
+        _GENERATION += 1
+        for worker in (_WORKER, _SPARE, _STARTING_SPARE):
+            if worker is not None:
+                worker.close()
+        _WORKER, _SPARE, _STARTING_SPARE = None, None, None
 
 
 atexit.register(stop)

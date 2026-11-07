@@ -37,6 +37,34 @@ def stageable_verb_names() -> tuple[str, ...]:
     return tuple(command.name for command in catalog.COMMANDS if stageable(command))
 
 
+#: ボディの形の添字(面・辺・頂点の番号)で指す参照の種別。ボディの形が変わると添字が別の部分を指す。
+SHAPE_REF_KINDS = ("face", "edge", "vertex")
+
+
+def shape_ref_bodies(args: dict) -> dict[str, list[str]]:
+    """引数名 -> その値が形の添字で指しているボディの id。参照1つ(`{"body", "kind", "index"}`)かその配列を見る。
+    `kind` が無いか `None` の参照(`plane_face` は `{"body", "index"}` でも渡せる)も数える。原点パーツ(`{"datum"}`)・ボディそのもの
+    (`kind: "body"`)・スケッチの参照は形の添字を持たないので入らない。
+    `body` も `index` も型を見ずあれば数える(解決側 `verbs._common.resolve_shape_ref` と揃える: `body` は `str()` で引き、
+    `index` は `selection._as_index` が `1.0`・`"1"` も受ける。型で絞ると、解決側が受ける参照が外れ損なう)。
+    """
+    found: dict[str, list[str]] = {}
+    for name, value in args.items():
+        refs = value if isinstance(value, list) else [value]
+        bodies = [
+            str(ref["body"])
+            for ref in refs
+            if isinstance(ref, dict)
+            and "body" in ref
+            and "index" in ref
+            # 解決側は `kind` が無い参照も `None` の参照も受ける。
+            and (ref.get("kind") is None or ref["kind"] in SHAPE_REF_KINDS)
+        ]
+        if bodies:
+            found[name] = bodies
+    return found
+
+
 def merge_args(command: catalog.Command, current: dict, update: dict) -> dict:
     """`current` に `update` を併合して検査した新しい辞書を返す。値が `None` のキーは外す(「まだ決めていない」へ戻す)。
 

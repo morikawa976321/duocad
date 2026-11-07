@@ -320,25 +320,67 @@ def test_face_groups_report_both_passes():
     assert payload['untriangulated'] == []
 
 
-def test_sketch_region_with_a_line_ending_inside_a_circle_meshes_like_the_standard_mesher():
-    """スケッチの線が円の中で終わる領域は、内側の辺が外周の頂点に 2.4e-16 ずれて着く(healer は揃えない)。
+def _disc_face_with_a_line_ending_inside():
+    """円板の面で、円の中で終わる線が内側の辺(INTERNAL の wire)として残っているもの。
+    平面を線と円の辺で `BRepAlgoAPI_Splitter` に割って作る(スケッチの領域は行き止まりの線を面から外すので、ここでは経由しない)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+    from OCP.TopTools import TopTools_ListOfShape
+    from OCP.gp import gp_Circ, gp_Pln
+
+    from duocad import brep_geometry, brep_topology
+    plane = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), -50.0, 50.0, -50.0, 50.0).Face()
+    line = BRepBuilderAPI_MakeEdge(gp_Pnt(0.0, 0.0, 0.0), gp_Pnt(10.0, 0.0, 0.0)).Edge()
+    circle = BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(10.0, 0.0, 0.0), gp_Dir(0, 0, 1)), 4.0)).Edge()
+    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    arguments.Append(plane)
+    tools.Append(line)
+    tools.Append(circle)
+    splitter = BRepAlgoAPI_Splitter()
+    splitter.SetArguments(arguments)
+    splitter.SetTools(tools)
+    splitter.Build()
+    assert splitter.IsDone()
+    faces = brep_topology.subshapes(splitter.Shape(), TopAbs_ShapeEnum.TopAbs_FACE)
+    discs = [TopoDS.Face_s(face) for face in faces if brep_geometry._face_props(face)[0] < 1000.0]
+    assert len(discs) == 1
+    return discs[0]
+
+
+def test_a_face_with_a_line_ending_inside_a_circle_meshes_like_the_standard_mesher():
+    """円の中で終わる線を内側の辺に持つ面は、内側の辺が外周の頂点に 2.4e-16 ずれて着く(healer は揃えない)。
     CAD 頂点の共有で正当な接続と判定し、標準メッシャーと同じ三角形になる(以前は 12 巡回って面が消えた)。"""
+    face = _disc_face_with_a_line_ending_inside()
+    wires = brep_topology_wires(face)
+    assert any(wires), '材料が内側の辺(INTERNAL の wire)を持たない'
+    standard_mesh(face, 0.2)
+    reference = per_face_triangles(face)
+    diagnostics = kernel_meshing.mesh_shape(face, 0.2, 0.35)
+    assert diagnostics['termination'] == 'resolved' and diagnostics['rounds'] == 0
+    assert diagnostics['endpoint']['mismatches'] >= 1
+    assert per_face_triangles(face) == reference
+
+
+def test_sketch_regions_with_a_line_ending_inside_a_circle_all_get_triangles():
+    """落ちたら、円の中で終わる線のあるスケッチの領域が、三角形のない領域として一覧に残る。"""
     from duocad import region
     from duocad.server import Session
     session = Session(0.2)
     sketch_id = session.sketch_create('XY')['sketch_id']
     session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])
     session.add_circle(sketch_id, [10.0, 0.0], 4.0)
-    faces = [item['face'] for item in region._regions_detailed(session.document, sketch_id)]
-    assert faces
-    for face in faces:
-        standard_mesh(face, 0.2)
-        reference = per_face_triangles(face)
-        diagnostics = kernel_meshing.mesh_shape(face, 0.2, 0.35)
-        assert diagnostics['termination'] == 'resolved' and diagnostics['rounds'] == 0
-        assert diagnostics['endpoint']['mismatches'] >= 1
-        assert per_face_triangles(face) == reference
-    assert region.regions_with_geometry(session.document, sketch_id, 0.2)[0]['indices']
+    found = region.regions_with_geometry(session.document, sketch_id, 0.2)
+    assert len(found) == 1 and found[0]['indices']
+
+
+def brep_topology_wires(face):
+    """面の wire ごとの「辺がすべて INTERNAL か」。"""
+    from OCP.TopAbs import TopAbs_Orientation
+    from duocad import brep_topology
+    return [
+        all(edge.Orientation() == TopAbs_Orientation.TopAbs_INTERNAL
+            for edge in brep_topology.subshapes(wire, TopAbs_ShapeEnum.TopAbs_EDGE))
+        for wire in brep_topology.subshapes(face, TopAbs_ShapeEnum.TopAbs_WIRE)
+    ]
 
 
 def _lines(*segments):

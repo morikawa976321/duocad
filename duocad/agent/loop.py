@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import threading
 import unicodedata
@@ -535,7 +536,7 @@ class AgentLoop:
     def _dimensions_nobody_asked_for(self, call: ToolCall) -> tuple[str, ...]:
         """人が量を言っていないのにモデルが埋めた寸法引数の名前(空なら問題なし)。
 
-        会話に出た全てのユーザー発話を見る(「上面をR3で丸めて」のあとの「反対側も同じように」があるので、直近の1発話に絞ると正しい依頼を止める)。
+        見るのは今回の発話と直前の1発話だけ(「上面をR3で丸めて」のあとの「反対側も同じように」を通すため直前は要る。全発話だと、一度量を言えば以後ずっと素通りする)。
         印が無いverb(`catalog.dimension_params` が空)は素通しする。`set_visible` の `visible` や `extrude` の `mode` のような
         言葉で指定される how は見ない(理由は `Param.dimension`)。
         """
@@ -554,9 +555,27 @@ class AgentLoop:
         if not filled:
             return ()
         said = " ".join(
-            turn.text for turn in self.turns if isinstance(turn, UserTurn)
+            [turn.text for turn in self.turns if isinstance(turn, UserTurn)][-_GUARD_UTTERANCES:]
         )
-        return () if _mentions_a_quantity(said) else filled
+        if not _mentions_a_quantity(said):
+            return filled
+        # 数字が見つかったときだけ文書の名前(「ボディ2」「治具2」)を除いて数え直す。名前の数字は量ではない。
+        values = [number for name in filled for number in _numbers_in(arguments[name])]
+        return () if _mentions_a_quantity(said, self._document_names(), values) else filled
+
+    def _document_names(self) -> tuple[str, ...]:
+        """文書のボディ・スケッチの名前(読めなければ空)。`describe_document` を読むだけ(文書を変えない)。"""
+        try:
+            described = self.tools.call("describe_document", {})
+        except Exception:  # noqa: BLE001 —— 読めなければ名前は除かない(従来どおり数字を量と読む)
+            return ()
+        names = [
+            entry.get("name")
+            for key in ("bodies", "sketches")
+            for entry in (described.get(key) or [])
+            if isinstance(entry, dict)
+        ]
+        return tuple(name for name in names if isinstance(name, str) and not name.isdigit())
 
     def _staged_verb(self) -> Optional[str]:
         """構えている verb の名前(無ければ None)。`get_command` を読むだけ(文書を変えない)。"""
@@ -706,6 +725,9 @@ def _failure(tool: str, code: str, message: str, exception: str) -> dict:
     return {"error": {"code": code, "message": message, "tool": tool, "exception": exception}}
 
 
+#: 寸法のガードが量を探すユーザー発話の数(今回 + 直前)。置いた値で、実測ではない。
+_GUARD_UTTERANCES = 2
+
 #: 識別子らしいかたまり(`body_1` / `sketch-1c72a3c7` / `entity-75aa`): 英字で始まる語と、`-` か `_` で続く英数字の並び。
 #: 区切りを含むものだけを取る(`[A-Za-z]\w*` で広く取ると `R3` や `M8` まで消えて、「上面をR3で丸めて」が「数量を言っていない」と読まれる)。
 #: 語頭の直前を英数字でないことに限るのは、英数字が長く続く入力(base64 の貼り付けなど)に開始位置ごとの走査をさせず、
@@ -749,16 +771,50 @@ def _says_a_kanji_quantity(text: str) -> bool:
     return False
 
 
-def _mentions_a_quantity(text: str) -> bool:
+#: 数字を伴わない比率の言い方(「半径を倍にして」「半分の大きさに」)。人が量を与えた依頼なので、モデルの導いた寸法を通す。
+_RATIO_WORDS = ("倍", "半分")
+
+
+#: 名前そのものが寸法の書き方(`R3` / `M8` / `t2` / `10mm` / `0.5`): 英字1字までの記号 + 数 + 単位。STEP のファイル名がボディの名前になるので実際にある。
+_NAME_AS_NOTATION = re.compile(r"[A-Za-zφΦ]?(\d+(?:\.\d+)?)(?:mm|cm|m|deg|°)?")
+
+
+def _numbers_in(value: Any) -> list[float]:
+    """引数の値に入っている数(入れ子のリストも開く。真偽値は数に数えない)。"""
+    if isinstance(value, (list, tuple)):
+        return [number for item in value for number in _numbers_in(item)]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return []
+    try:
+        return [float(value)]
+    except OverflowError:  # JSON の整数は float に収まらないことがある。断るのは verb の引数検査に任せる
+        return []
+
+
+def _names_a_filled_value(name: str, values: Sequence[float]) -> bool:
+    """名前が寸法の書き方そのもので、その数がモデルの埋めた値のどれかと同じ。"""
+    notation = _NAME_AS_NOTATION.fullmatch(name)
+    return notation is not None and any(math.isclose(float(notation.group(1)), value) for value in values)
+
+
+def _mentions_a_quantity(text: str, names: Sequence[str] = (), values: Sequence[float] = ()) -> bool:
     """人が数量を口にしたか。識別子の中の数字は数えない(`body_1` を「寸法を言った」と読むとガードが素通りする)。全角は NFKC で寄せてから見る。
     `Z-5mm` や `M8-30` のような寸法の書き方は識別子に数えず、漢数字に単位の付いた量(「三ミリ」)は数字がなくても量と読む。
+    `names`(文書のボディ・スケッチの名前)は先に除く: 「ボディ2」の 2 は量ではない。「倍」「半分」は量と読む。
+    名前が寸法の書き方そのもの(`R3`)のときは、本文の `R3` が名前か寸法かを綴りでは決められない。その数がモデルの埋めた値
+    (`values`)と同じなら除かない(人の書いた数をそのまま使っているので捏造ではない。「辺をR3で丸めて」に `radius: 3`)。
+    違う値なら名前として除く(「R3 を押し出して」に `distance: 10`)。
 
     厳密な照合(渡した値がそのまま本文にあるか)にはしない: 「半径4mmの円」に `diameter: 8` は正しい導出で、弾くと普通の依頼が通らない。
     見るのは人が量を与えたかどうかだけ(与えていないなら、モデルが埋めた寸法は必ず捏造)。
     """
     normalized = unicodedata.normalize("NFKC", text)
+    for name in sorted({unicodedata.normalize("NFKC", n) for n in names}, key=len, reverse=True):
+        if _names_a_filled_value(name, values):
+            continue
+        normalized = normalized.replace(name, " ")
     plain = _IDENTIFIER.sub(_identifier_or_notation, normalized)
-    return bool(_DIGIT.search(plain)) or _says_a_kanji_quantity(plain)
+    return bool(_DIGIT.search(plain)) or _says_a_kanji_quantity(plain) or any(word in plain for word in _RATIO_WORDS)
 
 
 def _merge_usage(total: dict, latest: dict) -> dict:

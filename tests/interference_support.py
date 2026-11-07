@@ -53,9 +53,8 @@ def plate_with_hole(hole_radius, size=20.0, height=10.0):
     return cut(box(-size / 2, -size / 2, 0, size, size, height), cylinder(0, 0, -1, hole_radius, height + 2))
 
 
-def nested_boxes(clearance):
-    """角を丸めた外箱(40×30×20・壁 2・丸め 3+2)に、丸めを同心にして隙間 `clearance` だけ小さい中子を入れた組。"""
-    radius = 3.0
+def nested_boxes(clearance, radius=3.0):
+    """角を丸めた外箱(40×30×20・壁 2・丸め `radius`+2)に、丸めを同心にして隙間 `clearance` だけ小さい中子を入れた組。"""
     outer = filleted_box(0, 0, 0, 40, 30, 20, radius + 2.0)
     pocket = filleted_box(2, 2, 2, 36, 26, 30, radius)
     core = filleted_box(2 + clearance, 2 + clearance, 2 + clearance, 36 - 2 * clearance, 26 - 2 * clearance, 25, radius - clearance)

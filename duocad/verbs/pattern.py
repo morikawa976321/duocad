@@ -18,6 +18,7 @@ import math
 from typing import Any, Callable, Dict, List, Sequence
 
 from .. import parameters
+from ._common import editable_sketch
 from ._sketch_geometry import geometry_signature as _geometry_signature
 from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
@@ -101,6 +102,8 @@ def _require_entities(entity_ids: Sequence[str], verb: str) -> List[str]:
     ids = [str(entity_id) for entity_id in entity_ids]
     if not ids:
         raise ValueError(f"{verb} requires at least one entity")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{verb} got duplicate entity ids: {ids!r}")
     return ids
 
 
@@ -150,7 +153,8 @@ def pattern_rectangular(
     nx: int,
     ny: int,
 ) -> List[str]:
-    """図形群を nx × ny の矩形状に反復し、作った複製の EntityId を返す。"""
+    """図形群を nx × ny の矩形状に反復し、作った複製の EntityId を返す。隠したスケッチへは足せない。"""
+    editable_sketch(doc, sketch_id)
     if not parameters.is_positive_int(nx) or not parameters.is_positive_int(ny):
         raise ValueError(f"nx/ny must be integers >= 1, got nx={nx!r}, ny={ny!r}")
     nx_i, ny_i = int(nx), int(ny)
@@ -204,7 +208,9 @@ def pattern_circular(
     - `total_angle` は `0 < angle <= 360`。360超は複製が必ず重なるので受け取らない。
     - **回転中心と中心が一致する図形は、元と幾何として重なる複製があるときだけ ValueError**(重なる複製は
       「反復したのに増えない」が成功として通り、領域検出が同じ辺を2本見る)。
+    - 隠したスケッチへは足せない。
     """
+    editable_sketch(doc, sketch_id)
     if not parameters.is_positive_int(count):
         raise ValueError(f"count must be an integer >= 1, got {count!r}")
     count_i = int(count)

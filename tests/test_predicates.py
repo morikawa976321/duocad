@@ -1,6 +1,8 @@
 """述語による選択の契約。"""
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from duocad import kernel, predicates, query, selection
@@ -401,6 +403,50 @@ def test_parallel_to_selects_straight_edges_only_not_arcs_whose_chord_is_paralle
     kinds = {edge["index"]: edge["kind"] for edge in query.describe_edges(shape)}
     assert picked and {kinds[ref["index"]] for ref in picked} == {"line"}
     assert not set(chord_parallel_arcs) & {ref["index"] for ref in picked}
+
+
+def _line_edge(direction):
+    return {"kind": "line", "start": [0.0, 0.0, 0.0], "end": [10 * c for c in direction]}
+
+
+def test_parallel_to_rejects_an_edge_tilted_by_one_degree():
+    """落ちたら、テーパー1度の側面の縦の辺が `parallel_to Z` に一致し、「垂直な辺」の選択に傾いた辺が混ざる。"""
+    tilt = math.radians(1.0)
+    assert predicates._is_parallel(_line_edge((0.0, 0.0, 1.0)), (0.0, 0.0, 1.0))
+    assert not predicates._is_parallel(_line_edge((math.sin(tilt), 0.0, math.cos(tilt))), (0.0, 0.0, 1.0))
+
+
+def test_parallel_to_keeps_the_edges_of_a_rotated_body_after_a_step_round_trip(tmp_path):
+    """落ちたら、STEP から読んだ(座標が丸められた)回転済みの形の、平行なはずの辺が `parallel_to` から外れる。"""
+    import re
+
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+
+    transform = gp_Trsf()
+    transform.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 2, 3)), math.radians(37.0))
+    rotated = BRepBuilderAPI_Transform(BRepPrimAPI_MakeBox(300.0, 5.0, 5.0).Shape(), transform, True).Shape()
+    writer = STEPControl_Writer()
+    writer.Transfer(rotated, STEPControl_AsIs)
+    path = tmp_path / "rotated.step"
+    writer.Write(str(path))
+
+    def round_to_3_places(match):
+        numbers = (float(text) for text in match.group(2).split(","))
+        return f"{match.group(1)}({','.join(repr(round(number, 3)) for number in numbers)})"
+
+    text = re.sub(
+        r"((?:CARTESIAN_POINT|DIRECTION)\('[^']*',)\(([^)]*)\)", round_to_3_places, path.read_text(encoding="utf-8")
+    )
+    shape = kernel.read_step_text(text)
+
+    x_axis = gp_Dir(1, 0, 0).Transformed(transform)
+    unit = (x_axis.X(), x_axis.Y(), x_axis.Z())
+    along_x = [edge for edge in query.describe_edges(shape) if edge["length"] > 100.0]
+    assert len(along_x) == 4
+    assert all(predicates._is_parallel(edge, unit) for edge in along_x)
 
 
 @pytest.mark.parametrize(

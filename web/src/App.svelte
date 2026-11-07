@@ -7,11 +7,12 @@
    * 描き直すだけで、選択の値を覚えない。責務は、ピック→コアの選択への翻訳(修飾キーで
    * 追加・除去・置き換え)と、previewController が指示する送信・幽霊の描画。
    */
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import { sharedArgsChangeNote } from './sharedArgsController'
   import { appendedEntries } from './logTail'
   import { createPreviewController, type PreviewInput } from './previewController'
+  import { clearEdit, expectedItems, modifyEdit, selectionDiff, toggleEdit, type SelectionEdit } from './selectionEdits'
   import { createFaceKinds } from './faceKinds'
   import {
     bodyRef,
@@ -44,7 +45,7 @@
   } from './commands/features'
   import { entityPointKeys, ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
-  import { isImeKey, ownsEscapeKey } from './keys'
+  import { isImeKey, isTextEntry, ownsEscapeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
   import type { MeasureItem, MeasurePayload } from './session'
@@ -71,10 +72,12 @@
     runsWithoutSketchId,
   } from './commands/sketch'
   import ChannelBadge from './ChannelBadge.svelte'
+  import { reloadIfServerReplaced } from './serverRestart.svelte'
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { fail, errorLog, inform } from './Toast.svelte'
+  import Toast, { fail, errorLog, inform, withdraw } from './Toast.svelte'
+  import { loadDataPanelOpen, loadSidebarOpen, saveDataPanelOpen, saveSidebarOpen } from './viewSettings'
   import {
     createSession,
     type Applied,
@@ -114,11 +117,13 @@
   import { createFaceChains, suggestedAdditions } from './faceChains'
   import { createInterference } from './interference.svelte'
   import InterferencePanel from './InterferencePanel.svelte'
+  import FrameAllButton from './FrameAllButton.svelte'
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
   import { createSketchGuideRequests } from './sketchGuideRequests.svelte'
   import WaitBar from './WaitBar.svelte'
+  import FileDrop from './FileDrop.svelte'
   import {
     createViewport,
     type BoxSelectEvent,
@@ -172,14 +177,15 @@
   let viewport: Viewport | null = null
 
   let status = $state<ConnectionStatus>('connecting')
+  let connectionEpoch = 0
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
+  let dropUploading = $state(false)
+  let dropSince = $state<number | null>(null)
   let opCounter = 0
-  /** 送って配信待ちの `clear_selection` の `client_op`。描画に使わない。 */
-  let clearingOp: number | null = null
 
   /** 画面にサーバ計算の幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
@@ -254,12 +260,15 @@
     wantsPick(): PickTarget | null
     wantsPickDatum(): boolean
     setPick(ref: SelectionRef): boolean
-    commitFailed(): void
+    commitFailed(sendOnly?: boolean): void
     reconnected(): void
     commandSucceeded(): void
     previewFailed(message: string, input: PreviewInput): boolean
     previewSucceeded(): void
     refusesFace(bodyId: string, faceIndex: number): string | null
+    undoLastPoint(): boolean
+    evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[]
+    isEmptyArgField(target: EventTarget | null): boolean
   } | null>(null)
 
   const faceKinds = createFaceKinds()
@@ -371,9 +380,12 @@
    * 開閉のたびに `.viewport` の寸法が変わり射影が変わる(`viewport.ts` の `applySize`)ので、
    * 画面座標を使い回す側(実機検査)は開閉を挟んだら取り直すこと。
    */
-  let dataPanelOpen = $state(true)
+  let dataPanelOpen = $state(loadDataPanelOpen())
   /** 右サイドバー(`AiPanel` だけ)を開いているか。`{#if}` で `<aside>` ごと出し分け。`.viewport` のサイズ指定は動かさず、flex の配分だけが変わる(左と同じ)。 */
-  let sidebarOpen = $state(false)
+  let sidebarOpen = $state(loadSidebarOpen())
+  let aiPanel: { focusInput(): void } | undefined = $state()
+  $effect(() => saveDataPanelOpen(dataPanelOpen))
+  $effect(() => saveSidebarOpen(sidebarOpen))
   /** 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。見た目だけの状態。 */
   let settingsOpen = $state(false)
   /** 形状最適化の CG を解く装置の設定(サーバの `fem_status`)。 */
@@ -388,8 +400,12 @@
   const myClientOps = new Set<number>()
   /** 直前に「面の削除」の代案で広げた選択の鍵(`suggestedAdditions`)。 */
   let widenedDeletion: string | null = null
-  /** この画面が送って、配信がまだ返ってこない選択の変更(`client_op`)。 */
-  const selectionOpsInFlight = new Set<number>()
+  /**
+   * この画面が送って、配信がまだ返ってこない選択の変更(`client_op` -> 選択への効き方。`null` はサーバが決める変更)。
+   * 並びは送った順で、サーバが処理する順でもある。差分は `currentItems()` がこれを重ねた選択に対して組む。
+   * クリックは手元に溜めずすぐ送る: 溜めた分は、後から送る要求(確定・中断・取り消し)より遅れて届いて効いてしまう。
+   */
+  const selectionOpsInFlight = new Map<number, SelectionEdit | null>()
   /** 代案で選択を広げた変更の `client_op`。返ってくるまで確定させない(広げた範囲が画面に出る前の Enter で確定しない)。 */
   let wideningOp = $state<number | null>(null)
   /**
@@ -400,20 +416,48 @@
    */
   let selfSelections = $state(0)
   /**
+   * いまのコマンドが画面で起動した時点で、送り終えていた最後の `client_op`。その応答は起動より前の操作のものなので
+   * `selfSelections` に数えない(数えると、中断の直前に押した分の応答が、起動し直した後に届いて即適用を引く)。
+   */
+  let opsBeforeCommand = 0
+  /**
    * 送った `select_face_boundaries` の op(返るまで送り直さない)。人のクリックではないので `selfSelections` に数えない
    * (数えると、繋ぎ直した後の空振りの応答が別の画面で起動された即適用の verb を確定させる)。
    */
   let faceBoundaryOp: number | null = null
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  const ai = createAiChat({ send: (text) => session.aiSend(text), fail, inform, hidden: () => !sidebarOpen })
+  /** AI パネルの本体(会話欄)を出しているか。サイドバーを閉じるとパネルごと消えるので、開き直したら開いた状態に戻す。 */
+  let aiPanelOpen = $state(true)
+  $effect(() => {
+    if (!sidebarOpen) aiPanelOpen = true
+  })
+  const ai = createAiChat({
+    send: (text) => session.aiSend(text),
+    fail,
+    inform,
+    hidden: () => !sidebarOpen || !aiPanelOpen,
+  })
 
   const serverWait = createServerWait()
+  let serverSince = $state<number | null>(null)
+  $effect(() => {
+    const times = [serverSince, dropSince].filter((time): time is number => time !== null)
+    serverWait.update(times.length === 0 ? null : Math.min(...times))
+  })
+  // `FileDrop` は取り込みへ渡したあと `since` を残す。その応答か失敗で `pendingOp` が解けたら、ここで消す。
+  $effect(() => {
+    if (!dropUploading && pendingOp === null) dropSince = null
+  })
 
   const session = createSession({
     onState: handleState,
-    onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where, clientOp, previewId) => {
+    onWaiting: (oldestSentAt) => {
+      serverSince = oldestSentAt
+    },
+    onError: (wireMessage, where, clientOp, previewId, kind) => {
+      // サーバは `例外名: 本文` で返す(MCP と同じ形)。入力の誤り・断りは例外名が使う人に何も言わないので、画面に出すときだけ落とす。
+      const message = kind === 'refusal' || kind === 'history_edge' ? wireMessage.replace(/^[A-Za-z_]\w*: /, '') : wireMessage
       // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。後から送った要求があれば古い断りで、
       // 捨てる(消すと、その後の要求の応答まで捨てる)。
       if (where === 'preview') {
@@ -437,14 +481,15 @@
       }
       // `send` はverbではなく「繋がっていないので送れなかった」で、繋がっていないことに気づく唯一の札。
       // 内部の語を頭に付けない。
-      fail(where === 'send' ? message : `エラー[${where}] ${message}`)
+      // 履歴の端での取り消し・やり直しは壊れたのではないので赤い札にしない(判定はサーバ。印は `kind`)。
+      if (kind === 'history_edge') inform(message)
+      else fail(where === 'send' ? message : `エラー[${where}] ${message}`)
       // 待ちを解くのは、待っている操作そのものが失敗したときと、送れなかったときだけ。確定の直前に送った
       // プレビューなどの失敗で解くと、確定がまだサーバで走っている間に次の Enter が通る。
       if (where === 'send') {
         pendingOp = null
-        // 送れなかった全解除の配信は来ない。残すと、繋ぎ直しの試行中に送って失敗しその試行が成功したとき、
-        // `clearingOp` が残って以後の選択の差分が空の選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
-        clearingOp = null
+        // 送れなかった選択の変更の配信は来ない。残すと、繋ぎ直しの試行中に送って失敗しその試行が成功したとき、
+        // 以後の選択の差分が、届かなかった変更を重ねた選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
         selectionOpsInFlight.clear()
         wideningOp = null
       } else {
@@ -466,11 +511,17 @@
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
       const category = CATEGORY_OF.get(where)
-      if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed()
+      if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed(where === 'send')
     },
     onWarning: (message) => fail(`警告 ${message}`),
+    onReconnected: () => void reloadIfServerReplaced(),
+    onConnectionRestored: (failureNotice) => {
+      if (failureNotice !== null) withdraw(failureNotice)
+      inform('再接続した')
+    },
     onStatus: (next) => {
       // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
+      if (next !== status) connectionEpoch += 1
       status = next
       // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
@@ -488,9 +539,8 @@
         pendingOp = null
         preview.clear()
       }
-      // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
+      // 選択の変更の配信も同じく返ってこない(残すと以後の差分が、届かなかった変更を重ねた選択に対して組まれ続ける)。
       if (next !== 'open') {
-        clearingOp = null
         selectionOpsInFlight.clear()
         wideningOp = null
         preview.disconnect()
@@ -863,6 +913,13 @@
     session.sendCommand(...[...request, op])
   }
 
+  /** `sendTracked` と同じだが、文書の世代が `generation` のままのときだけサーバに実行させる。 */
+  function sendTrackedFor(generation: number, ...request: CommandRequest): void {
+    const op = nextOp()
+    pendingOp = op
+    session.sendCommandFor(generation, ...[...request, op])
+  }
+
   /** 自分が出して待っている操作の応答なら待ちを解く(解いたら true)。 */
   function releasePending(clientOp: number | null): boolean {
     if (clientOp === null || clientOp !== pendingOp) return false
@@ -887,6 +944,7 @@
     if (previous !== null && previous.generation !== next.generation) {
       resumeMemory = 'idle'
       modeCrossedDocument = true
+      viewport?.reapplyResolution() // サーバは文書の切り替えで見え方を捨てる
     }
     files.onState(next)
     // 待たせたクリックの状況(コマンド・ボディの版)が変わっていれば捨てる(古い版の連なりは届いても使わないので、
@@ -932,10 +990,14 @@
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
-      if (applied.client_op !== null && myClientOps.has(applied.client_op) && applied.client_op !== faceBoundaryOp) {
+      if (
+        applied.client_op !== null &&
+        myClientOps.has(applied.client_op) &&
+        applied.client_op !== faceBoundaryOp &&
+        applied.client_op > opsBeforeCommand
+      ) {
         selfSelections += 1
       }
-      if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
       settleSelectionOp(applied.client_op)
       releasePending(applied.client_op)
       return
@@ -971,12 +1033,32 @@
       }
       releasePending(applied.client_op)
       files.refresh()
+      if (own && applied.action === 'new') {
+        const generation = next.generation
+        void tick().then(() => {
+          if (model?.generation !== generation) return
+          const field = document.querySelector<HTMLInputElement>('#file-name-input')
+          if (document.activeElement !== field && isTextEntry(document.activeElement)) return
+          field?.focus()
+          field?.select()
+        })
+      }
       return
     }
     if (applied) {
       // 共有の undo は AI の操作も戻すので、何が戻ったかを言う。MCP からの undo は `applied` が届かない(`Server._on_core_change`)。
       if (applied.verb === 'undo') inform(`取り消した: ${commandLabel(applied.undone)}`)
       if (applied.verb === 'redo') inform(`やり直した: ${commandLabel(applied.redone)}`)
+      // 取り消したあとの新しい操作で、やり直せる分が消えた(自動保存でファイルからも消える)。
+      if (applied.verb !== undefined && applied.discarded_redo !== undefined) {
+        inform(`やり直し ${applied.discarded_redo} 件を捨てた`)
+      }
+      // 形が変わったボディの面・辺を指していた構えの引数は、サーバが外している(欄の指定は配信で消える)。
+      const droppedArgs = applied.verb === undefined ? [] : (applied.dropped_args ?? [])
+      if (droppedArgs.length > 0 && next.command !== null) {
+        const verb = next.command.verb
+        inform(`形が変わったので「${droppedArgs.map((name) => argLabel(verb, name)).join('」「')}」の指定を外した`)
+      }
       // 作ったスケッチへはサーバが誰の操作でも入れる(`Session._settle_workspace`)。ここでは入らない。
       if (applied.verb === 'import_step') {
         // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
@@ -986,6 +1068,14 @@
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
+      if (applied.verb === 'import_svg') {
+        const [width, height] = applied.size_mm
+        const regions = applied.region_count === 0 ? '閉じた領域が無い' : `領域 ${applied.region_count} 個`
+        const skipped = applied.skipped === '' ? '' : `。取り込めなかった: ${applied.skipped}`
+        inform(`SVGを読み込んだ: ${width.toFixed(1)} × ${height.toFixed(1)} mm、図形 ${applied.entity_count} 個、${regions}${skipped}`)
+        viewport?.frameSketchEntities(applied.sketch_id, applied.entity_ids)
+      }
+      if (applied.verb === 'thread') inform(`ねじを刻んだ: D${applied.diameter} P${applied.pitch}`)
       if (releasePending(applied.client_op)) {
         // CommandHostが出した確定が成功したと確認できたので、ここで初めて無起動へ戻す(`commit()` の時点では
         // 成否が分からず、先に戻すとOCCTのフィレット失敗時の打ち直しが壊れる)。`CATEGORY_OF` に無い verb
@@ -1493,7 +1583,7 @@
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): number | null {
     if (add.length === 0 && remove.length === 0) return null
     const op = nextOp()
-    selectionOpsInFlight.add(op)
+    selectionOpsInFlight.set(op, modifyEdit(add, remove))
     session.modifySelection(add, remove, op)
     return op
   }
@@ -1507,8 +1597,14 @@
     const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
+      // 個数の上限がある引数(ねじ・測定)は、上限を超えるクリックを追加でなく置き換え(最古を外す)にする。
+      const evicted = already ? [] : (host?.evictionsFor(ref, current) ?? [])
+      if (evicted.length > 0) {
+        modifySelection([ref], evicted)
+        return
+      }
       const op = nextOp()
-      selectionOpsInFlight.add(op)
+      selectionOpsInFlight.set(op, toggleEdit(ref))
       session.toggleSelection([ref], op)
     } else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
@@ -1669,6 +1765,7 @@
    * それ以外は、起動前に選んであったもの(AI が選んだ面も)をそのコマンドの粒度へ畳む(`foldSelection`)。
    */
   function onCommandStart(verb: string): void {
+    opsBeforeCommand = opCounter
     measure.clear() // 次の操作に入ったら、前の測定の札は用済み
     pendingOptimizePreset = null
     // 別のverbへ直接移ったら前のverbの終わりとして選択を空にする(`onCommandEnd`)。同じverbの押し直しは終わりではない。
@@ -1709,8 +1806,10 @@
     note(`非表示だった${OPTIMIZE_ROLE_LABEL[role]}のボディ ${hidden.length} 個を表示した(割り当てを選択に並べるため)`)
   }
 
+  /** 選択が空だと言い切れないときだけ全解除を送る(サーバが決める変更が返っていない間は、空に見えても送る)。 */
   function clearSelectionIfAny(): void {
-    if (currentItems().length > 0) clearSelection()
+    const unknown = [...selectionOpsInFlight.values()].includes(null)
+    if (unknown || currentItems().length > 0) clearSelection()
   }
 
   // ---------------------------------------------------------------- 作業空間(起動中のコマンド・モード。issue #153)
@@ -1784,21 +1883,23 @@
     }
   }
 
-  /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
   function clearSelection(): void {
-    clearingOp = nextOp()
-    selectionOpsInFlight.add(clearingOp)
-    session.clearSelection(clearingOp)
+    const op = nextOp()
+    selectionOpsInFlight.set(op, clearEdit)
+    session.clearSelection(op)
   }
 
   /**
-   * 選択集合の差分を組むときに読む今の選択。送った `clear_selection` の配信がまだ届いていない間は空を返す。
-   * 配信前の `selection` を読むと、Esc直後に唯一選ばれていた要素をクリックしたとき `editSelection` が解除と判定し、
-   * コアでは「全解除 → その要素を外す」と順に効いて選んだはずの要素が選ばれない(サーバは1接続の要求を順に処理する)。
+   * 選択集合の差分を組むときに読む今の選択: 配信済みの選択に、送って返っていない変更を送った順に重ねたもの(`expectedItems`)。
+   * サーバは1接続の要求を順に処理するので、いま送る要求が届く時点の選択はこれになる。
+   * 配信済みの `selection` だけを読むと、返る前の次の操作が古い選択に対して差分を組む: Esc直後に唯一選ばれていた要素を
+   * クリックすると解除と判定されて選ばれず、上限つきの引数(ねじ・測定)への連続クリックは同じ最古を外す要求が重なって上限を超える。
+   * 見込みが外れるのは、ほかの画面・AI が同時に選択を変えたとき、送った変更が断られたとき、サーバが決める変更
+   * (確定・取り消しでの全解除、`selectFaceBoundaries`)が返っていないとき。外れても上限の超過は `overflowNote` が確定を止める。
    * 表示(ハイライト・件数)は配信どおりの `selection` を使う。
    */
   function currentItems(): SelectionRef[] {
-    return clearingOp !== null ? [] : (selection?.items ?? [])
+    return expectedItems(selection?.items ?? [], selectionOpsInFlight.values())
   }
 
   /**
@@ -1808,7 +1909,7 @@
    * 測定が断られたら、測れない項目だけを外す(`measureRefused`)。
    * `activeVerb === null` は、`onModeChanged` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
-  function onCommandEnd(verb: string): void {
+  function onCommandEnd(verb: string, staged: boolean): void {
     if (activeVerb === null) return
     activeVerb = null
     widenedDeletion = null
@@ -1825,7 +1926,23 @@
     }
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
-    clearSelectionIfAny()
+    if (staged) clearSelectionAsOfCommandEnd()
+    else clearSelectionIfAny()
+  }
+
+  /**
+   * 構えた verb の終わりが配信で届いたときの全解除: 終わった時点の選択(いま配信済みの選択)を外し、その後に送った変更は残す。
+   * 返っていない変更は、どれも終わりより後にサーバで効く(応答は送った順に届くので、終わりより前の分は届き終えている)。
+   * `clear_selection` をいま送ると、終わりの要求の後に押した分(Esc の直後のクリック)まで外れる。
+   */
+  function clearSelectionAsOfCommandEnd(): void {
+    const kept = expectedItems([], selectionOpsInFlight.values())
+    if (kept.length === 0) {
+      clearSelectionIfAny()
+      return
+    }
+    const { add, remove } = selectionDiff(currentItems(), kept)
+    modifySelection(add, remove)
   }
 
   /**
@@ -1848,7 +1965,7 @@
     untrack(() => {
       if (faceBoundaryOp !== null && selectionOpsInFlight.has(faceBoundaryOp)) return
       faceBoundaryOp = nextOp()
-      selectionOpsInFlight.add(faceBoundaryOp)
+      selectionOpsInFlight.set(faceBoundaryOp, null)
       session.selectFaceBoundaries(faceBoundaryOp)
     })
   })
@@ -1882,6 +1999,25 @@
       requestEdgeChains(bodyId, items.filter((item) => item.bodyId === bodyId).map((item) => item.edgeIndex))
     }
   }
+
+  /**
+   * 起動した瞬間に選ばれていた辺を連なりへ広げる(辺を1本選んでからフィレット・面取りを押す順でも、光った所と実際にかかる範囲が
+   * 揃う)。広げるのは起動の1回だけ: `edgeOnlyCommand` 以外を追跡しないので、起動後のクリックや外した辺は広げ直さない。
+   */
+  $effect(() => {
+    if (!edgeOnlyCommand) return
+    untrack(() => {
+      const edges = refsOfKind(currentItems(), 'edge').map((ref) => ({ bodyId: ref.body, edgeIndex: ref.index }))
+      if (edges.length === 0) return
+      const widen = () => {
+        const current = new Set(currentItems().map(refKey))
+        const add = edges.flatMap((edge) => edgeChainRefs(edge.bodyId, edge.edgeIndex) ?? []).filter((ref) => !current.has(refKey(ref)))
+        modifySelection(add, [])
+      }
+      if (edges.every((edge) => edgeChainRefs(edge.bodyId, edge.edgeIndex) !== null)) widen()
+      else deferUntilChains(edges, widen)
+    })
+  })
 
   /**
    * 「面の削除」の起動中か。丸めの面は、つながった丸め全体を1つの単位として選ぶ(`faceChains`)。確定の前に、どこまで消えるかが
@@ -1995,7 +2131,7 @@
         // メッシュボディには貼れない(平面が取れない。`sketch.resolve_plane` が断る)。
         // ボディ参照へ畳んでも `sketch_create` は面を要求するので、畳まずに理由を出す。
         if (meshBodyIds.has(event.hit.bodyId)) {
-          note('メッシュボディにはスケッチを貼れない(平面が取れない)')
+          fail('メッシュボディにはスケッチを貼れない(平面が取れない)。基準平面かほかのソリッドの面を指す')
           return
         }
         host.useSelectedFaceAsPlane()
@@ -2088,7 +2224,7 @@
     }
     const refused = host?.refusesFace(event.hit.bodyId, event.hit.faceIndex) ?? null
     if (refused !== null) {
-      note(refused)
+      inform(refused)
       return
     }
     editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
@@ -2259,6 +2395,10 @@
       const pickMode = toggleOnlyMode(event.mode)
       if (editSolidEdgeOrVertex(event, pickMode)) return
       if (event.hit !== null) editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+      return
+    }
+    if (event.pointRefused === 'shallow' && host?.wantsPoint()) {
+      inform('平面を浅い角度で見ているので点を置けない。視点を平面に向けてから置く')
       return
     }
     if (event.point && host?.wantsPoint()) {
@@ -2457,6 +2597,11 @@
       if (!ownsEscapeKey(focused)) clearSelectionIfAny()
       return
     }
+    // F は全体表示(ビューキューブ下のボタンと同じ)。修飾キーつき・押しっぱなし・入力欄の中では効かせない。
+    if (event.key.toLowerCase() === 'f' && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat)) {
+      if (documentOpen && !isImeKey(event) && !ownsEscapeKey(event.target as HTMLElement | null)) viewport?.frameVisible()
+      return
+    }
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (key !== 'z' && key !== 'y' && key !== 's') return
@@ -2466,7 +2611,7 @@
     const target = event.target as HTMLElement | null
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
-      (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
+      (target?.tagName === 'INPUT' && !['checkbox', 'radio', 'range'].includes((target as HTMLInputElement).type))
     // Ctrl+S は今の文書を手で書き直す(`files.save`)。保存は自動で済んでいる(issue #5)ので普段は何も変わらないが、
     // 自動保存が書けなかったときの押し直しと、ブラウザの「ページを保存」を止めるために残す。
     // `preventDefault()` はフォーカスがどこにあっても必ず通す(止めないとページ保存ダイアログが開き、保存が起きたか見えなくなる)。
@@ -2478,20 +2623,34 @@
       return
     }
     if (!documentOpen) return
-    if (isTextEditingField) return
+    // 文字が入っている欄ではブラウザ標準の取り消しに任せる。コマンドの引数の欄が空なら、奪っても失う文字が無いのでアプリへ回す。
+    if (isTextEditingField && host?.isEmptyArgField(target) !== true) return
+    // キーの押しっぱなし(自動反復)では働かせない。1 回の押下で 1 回だけ戻す・やり直す。
+    if (event.repeat) {
+      event.preventDefault()
+      return
+    }
+    // 打ちかけの点があるときの Ctrl+Z は、文書でなく最後の1点を戻す(コマンドは開いたまま)。
+    if (key === 'z' && !event.shiftKey && host?.undoLastPoint() === true) {
+      event.preventDefault()
+      return
+    }
     // 実行中は送らない(サーバも `DocumentBusy` で断る。Undo した条件のまま結果が足される)。
     if (optimizeBusy) {
       event.preventDefault()
       fail('形状最適化の実行中は取り消し・やり直しできない(終わるか中断してから)')
       return
     }
-    if (key === 'z' && !event.shiftKey) {
+    // サーバは1接続の要求を順に処理するので、確定の後ろに並んだ取り消しは、確定が断られると1つ前の成功した操作を戻す。
+    if (pendingOp !== null) {
       event.preventDefault()
-      session.undo(nextOp())
-    } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
-      event.preventDefault()
-      session.redo(nextOp())
+      inform('確定の応答待ちなので、取り消し・やり直しは終わってから')
+      return
     }
+    event.preventDefault()
+    // ここへ来るキーは z か y だけ。Shift+Z はやり直し。
+    if (key === 'z' && !event.shiftKey) session.undo(nextOp())
+    else session.redo(nextOp())
   }
 
   // ---------------------------------------------------------------- 可視性(パーツ一覧から)
@@ -2690,10 +2849,27 @@
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
+<FileDrop
+  context={() => ({
+    connected: status === 'open', documentOpen, mode: commandRowKey,
+    waiting: serverSince !== null || pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null,
+    commandActive: commandClickToggles(),
+    key: JSON.stringify([connectionEpoch, model?.generation, mode]), sketchId,
+  })}
+  onImport={(verb, path, id) => {
+    // `key` の照合は、まだ届いていない切り替え(別の画面・MCP が文書を替えた直後)を見られない。照合を通った今の世代を
+    // 付けて送り、サーバにも照合させる。`model` が無ければ -1(どの世代とも合わないので、サーバが断る)。
+    const generation = model?.generation ?? -1
+    if (verb === 'import_svg' && id !== null) sendTrackedFor(generation, 'import_svg', { path, sketch_id: id })
+    else if (verb === 'import_step') sendTrackedFor(generation, 'import_step', { path })
+  }}
+  bind:busy={dropUploading}
+  bind:since={dropSince}
+/>
 
 <div class="app">
   <header>
-    <!-- 開発版の札 / 安定版の更新ボタン(`ChannelBadge.svelte`)。窓を取り違えたら最初に目に入る左端に置く。 -->
+    <!-- 開発版の札(窓を取り違えたら最初に目に入る左端) / 安定版の更新ボタン(右端の「AI」の隣へ寄せる。`styles.css` の `#update-button`)(`ChannelBadge.svelte`)。 -->
     <ChannelBadge />
     <!-- 左サイドバー(ファイル一覧)の開閉。畳むとパネルが画面から消えるので、外に手を出す場所が要る。 -->
     <button
@@ -2736,7 +2912,13 @@
       id="sidebar-toggle"
       class="tag end"
       class:on={sidebarOpen}
-      onclick={() => (sidebarOpen = !sidebarOpen)}
+      onclick={async () => {
+        sidebarOpen = !sidebarOpen
+        if (sidebarOpen) {
+          await tick()
+          aiPanel?.focusInput()
+        }
+      }}
       title="AIパネルの表示/非表示"
       aria-pressed={sidebarOpen}
     >
@@ -2780,8 +2962,8 @@
       {#if mode.kind === 'sketch-pending'}
         <div class="mode-row">
           <span class="label">スケッチ</span>
-          <span id="sketch-mode" class="tag on">貼る先をクリック(基準平面 XY/XZ/YZ か、ソリッドの面)</span>
-          <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+          <span id="sketch-mode" class="tag on">貼る先を選んでいる</span>
+          <button id="sketch-exit" title="スケッチモードを抜ける" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
       <!-- スケッチモードの札とモード操作。idは実機検査が叩く口。 -->
@@ -2792,10 +2974,14 @@
             編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
             ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
           </span>
-          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}>
+          <button
+            id="sketch-look"
+            title="スケッチの平面を正面から見る"
+            onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}
+          >
             正面から見る
           </button>
-          <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+          <button id="sketch-exit" title="スケッチモードを抜ける" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
       {#if optimizeMode}
@@ -2806,7 +2992,7 @@
             ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
           </span>
           <!-- 走っている間は抜けさせない(抜けるとパネルごと中断ボタンが消え、止める手段がゼロになる)。 -->
-          <button id="optimize-exit" disabled={optimizeBusy} onclick={exitOptimizeMode}>
+          <button id="optimize-exit" title="形状最適化モードを抜ける" disabled={optimizeBusy} onclick={exitOptimizeMode}>
             抜ける
           </button>
         </div>
@@ -2816,7 +3002,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
+          busy={dropUploading || pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS
@@ -2875,6 +3061,7 @@
           thumbnailUrl={files.thumbnailUrl}
           onNeedThumbnail={files.wantThumbnail}
           lastCopied={files.lastCopied}
+          generation={files.generation}
         />
       </aside>
     {/if}
@@ -2906,6 +3093,7 @@
       {/if}
 
       {#if documentOpen}
+        <FrameAllButton onclick={() => viewport?.frameVisible()} />
         <InterferencePanel {interference} />
         <SelectionInfoPanel
           item={selectionInfo.item}
@@ -2913,7 +3101,10 @@
           names={selectionInfoNames}
         />
         <BrowserPanel
+          generation={model?.generation ?? null}
           bodies={partBodies}
+          hoverEnabled={mode.kind === 'idle' && model?.command == null && wantedKinds.length === 0 && wantedPick === null && !wantedVertices && pendingOp === null && !previewing}
+          onHoverBody={(bodyId) => viewport?.setBrowserHover(bodyId)}
           {sketches}
           activeSketchId={sketchId}
           originVisible={display.originVisible}
@@ -2983,10 +3174,13 @@
     {#if sidebarOpen}
       <aside class="sidebar">
         <AiPanel
+          bind:this={aiPanel}
           status={ai.status}
           connection={status}
           transcript={ai.transcript}
+          commandOf={commandDefinition}
           bind:draft={ai.draft}
+          bind:open={aiPanelOpen}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
           onConfigure={(providerKind, baseUrl) => {

@@ -46,6 +46,8 @@ export interface ResolutionTrackerDeps {
 
 export interface ResolutionTracker {
   update(now: number): void
+  /** 採用済みの印を捨て、次に落ち着いたとき同じ見え方でも必ずもう一度知らせる(サーバが文書の切り替えで目標を捨てたため)。 */
+  reapply(): void
   applied(): ViewportResolution
   /** face単位の高精度化を使うか。**切れるのは実機検査のためだけ**(既定は入り)。 */
   setFaceCulling(enabled: boolean): void
@@ -211,6 +213,11 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
 
   return {
     update,
+    reapply() {
+      resolutionApplied = false
+      lastFocusComputeEpoch = -1
+      lastFocusComputeGeneration = -1
+    },
     applied: () => appliedResolution,
     setFaceCulling(enabled) {
       if (faceCullingEnabled === enabled) return

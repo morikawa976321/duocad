@@ -4,7 +4,7 @@
   /** スケッチの平面の表示名。面に貼ったものの文言だけ場所で違う(ブラウザは「面」、ツールバーは「面に貼ったスケッチ」)。 */
   export function planeLabel(plane: SketchState['plane'], faceLabel = '面'): string {
     if (plane.kind === 'base') return plane.name
-    if (plane.kind === 'offset') return `オフセット ${plane.distance}mm`
+    if (plane.kind === 'offset') return `オフセット ${plane.distance} mm`
     return faceLabel
   }
 </script>
@@ -25,7 +25,10 @@
   import type { SectionState } from './viewport'
 
   let {
+    generation,
     bodies,
+    hoverEnabled,
+    onHoverBody,
     sketches,
     activeSketchId,
     originVisible,
@@ -46,7 +49,10 @@
     onSectionPosition,
     onSectionInvert,
   }: {
+    generation: number | null
     bodies: BodyMeta[]
+    hoverEnabled: boolean
+    onHoverBody: (bodyId: string | null) => void
     sketches: SketchState[]
     /** 編集中のスケッチ(無ければ null)。 */
     activeSketchId: string | null
@@ -97,11 +103,22 @@
   }
 
   let open = $state(true)
+  /** 「モデル」「スケッチ」の一覧ごとの畳み。再読み込みで開いた状態に戻る。 */
+  let bodiesOpen = $state(true)
+  let sketchesOpen = $state(true)
 
   /** 名前を書き換えている行の ID。下書きは別の状態に持つ: `{id, draft}` を1つにして `bind:value={draft}` にすると、
    *  欄を閉じた瞬間に消えかけの欄の束縛が null を読んで TypeError を投げる(実機で確認)。 */
   let renamingId = $state<string | null>(null)
   let draft = $state('')
+  let renameGeneration: number | null = null
+
+  $effect.pre(() => {
+    if (renameGeneration === generation) return
+    renameGeneration = generation
+    renamingId = null
+    draft = ''
+  })
 
   function startRename(id: string, current: string): void {
     draft = current
@@ -111,7 +128,7 @@
   /** 空・今と同じなら送らずに閉じる(前後の空白は落として送る。`renameTarget`)。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
    *  その間に別の行の ✎ が押されていると、相手の行の下書きを自分の名前で確定してしまう。 */
   function commitRename(id: string, current: string): void {
-    if (renamingId !== id) return
+    if (renamingId !== id || renameGeneration !== generation) return
     renamingId = null
     const next = renameTarget(draft, current)
     if (next !== null) onRename(id, next)
@@ -140,6 +157,31 @@
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
   const visibleSketchCount = $derived(sketches.filter((sketch) => sketch.visible).length)
 
+  function hoverBody(node: HTMLElement, bodyId: string | null) {
+    let hovered = false
+    const enter = () => {
+      hovered = true
+      onHoverBody(bodyId)
+    }
+    const leave = () => {
+      hovered = false
+      onHoverBody(null)
+    }
+    node.addEventListener('pointerenter', enter)
+    node.addEventListener('pointerleave', leave)
+    return {
+      update(next: string | null) {
+        bodyId = next
+        if (hovered) onHoverBody(bodyId)
+      },
+      destroy() {
+        node.removeEventListener('pointerenter', enter)
+        node.removeEventListener('pointerleave', leave)
+        if (hovered) onHoverBody(null)
+      },
+    }
+  }
+
 </script>
 
 <aside class="browser-panel" class:collapsed={!open}>
@@ -161,26 +203,30 @@
       <div class="group">
         <div class="group-head">
           <span class="group-name">原点</span>
-          <input
-            id="origin-visible-toggle"
-            type="checkbox"
-            checked={originVisible}
-            onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
-            title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
-          />
+          <label class="check-hit">
+            <input
+              id="origin-visible-toggle"
+              type="checkbox"
+              checked={originVisible}
+              onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
+              title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
+            />
+          </label>
         </div>
       </div>
 
       <div class="group">
         <div class="group-head">
           <span class="group-name">断面</span>
-          <input
-            id="section-toggle"
-            type="checkbox"
-            checked={section.on}
-            onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
-            title={section.on ? '断面をやめる' : '断面で切る'}
-          />
+          <label class="check-hit">
+            <input
+              id="section-toggle"
+              type="checkbox"
+              checked={section.on}
+              onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
+              title={section.on ? '断面をやめる' : '断面で切る'}
+            />
+          </label>
         </div>
         {#if section.on}
           <div class="section-controls">
@@ -205,7 +251,7 @@
                 value={formatPosition(section.position)}
                 onchange={commitPosition}
                 onkeydown={blurOnEnter}
-                title="平面の位置[mm]。数式も打てる"
+                title="平面の位置(単位は mm)。数式も打てる"
               />
               <span class="dim">mm</span>
             </label>
@@ -224,127 +270,151 @@
 
       <div class="group">
         <div class="group-head">
-          <span class="group-name">モデル</span>
+          <button
+            id="parts-group-toggle"
+            class="group-toggle"
+            onclick={() => (bodiesOpen = !bodiesOpen)}
+            aria-expanded={bodiesOpen}
+            title={bodiesOpen ? 'ボディの一覧を畳む' : 'ボディの一覧を開く'}
+          >
+            {bodiesOpen ? '▾' : '▸'} ボディ
+          </button>
           <span class="meta dim">{visibleCount}/{bodies.length} 表示</span>
         </div>
-        <div class="group-bulk">
-          <button id="parts-show-all" onclick={onShowAll}>全表示</button>
-          <button id="parts-hide-all" onclick={onHideAll}>全非表示</button>
-        </div>
-        <ul class="parts-list">
-          {#if bodies.length === 0}
-            <li class="empty dim">ボディが無い</li>
-          {/if}
-          {#each bodies as body (body.body_id)}
-            <li class="parts-row" class:hidden-row={!body.visible}>
-              {#if renamingId === body.body_id}
-                <input
-                  class="rename-input"
-                  type="text"
-                  bind:value={draft}
-                  use:focusSelect
-                  onkeydown={(event) => renameKey(event, body.body_id, body.name)}
-                  onblur={() => commitRename(body.body_id, body.name)}
-                />
-              {:else}
-                <input
-                  type="checkbox"
-                  checked={body.visible}
-                  onchange={(event) =>
-                    onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
-                  title={body.visible ? 'このボディを隠す' : 'このボディを表示'}
-                />
-                <span class="parts-name">{body.name}</span>
-                <span class="dim parts-count">{body.face_count}面</span>
-                <button
-                  class="row-action"
-                  onclick={() => startRename(body.body_id, body.name)}
-                  title="名前を変える">✎</button
-                >
-                <button
-                  class="row-action"
-                  onclick={() => onDeleteBody(body.body_id)}
-                  title="このボディを消す(Ctrl+Zで戻る)">✕</button
-                >
-              {/if}
-            </li>
-          {/each}
-        </ul>
+        {#if bodiesOpen}
+          <div class="group-bulk">
+            <button id="parts-show-all" onclick={onShowAll}>全表示</button>
+            <button id="parts-hide-all" onclick={onHideAll}>全非表示</button>
+          </div>
+          <ul class="parts-list">
+            {#if bodies.length === 0}
+              <li class="empty dim">ボディが無い</li>
+            {/if}
+            {#each bodies as body (body.body_id)}
+              <li class="parts-row" class:hidden-row={!body.visible} use:hoverBody={body.visible && hoverEnabled ? body.body_id : null}>
+                {#if renamingId === body.body_id}
+                  <input
+                    class="rename-input"
+                    type="text"
+                    bind:value={draft}
+                    use:focusSelect
+                    onkeydown={(event) => renameKey(event, body.body_id, body.name)}
+                    onblur={() => commitRename(body.body_id, body.name)}
+                  />
+                {:else}
+                  <label class="check-hit">
+                    <input
+                      type="checkbox"
+                      checked={body.visible}
+                      onchange={(event) =>
+                        onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
+                      title={body.visible ? 'このボディを隠す' : 'このボディを表示'}
+                    />
+                  </label>
+                  <span class="parts-name">{body.name}</span>
+                  <span class="dim parts-count">{body.face_count}面</span>
+                  <button
+                    class="row-action"
+                    onclick={() => startRename(body.body_id, body.name)}
+                    title="名前を変える">✎</button
+                  >
+                  <button
+                    class="row-action row-delete"
+                    onclick={() => onDeleteBody(body.body_id)}
+                    title="このボディを削除(Ctrl+Zで戻る)">✕</button
+                  >
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
 
       <div class="group">
         <div class="group-head">
-          <span class="group-name">スケッチ</span>
+          <button
+            id="sketches-group-toggle"
+            class="group-toggle"
+            onclick={() => (sketchesOpen = !sketchesOpen)}
+            aria-expanded={sketchesOpen}
+            title={sketchesOpen ? 'スケッチの一覧を畳む' : 'スケッチの一覧を開く'}
+          >
+            {sketchesOpen ? '▾' : '▸'} スケッチ
+          </button>
           <span class="meta dim">{visibleSketchCount}/{sketches.length} 表示</span>
         </div>
-        <div class="group-bulk">
-          <button id="sketches-show-all" onclick={onShowAllSketches}>全表示</button>
-          <button id="sketches-hide-all" onclick={onHideAllSketches}>全非表示</button>
-        </div>
-        <ul class="sketch-list" id="browser-sketches">
-          {#if sketches.length === 0}
-            <li class="empty dim">スケッチが無い</li>
-          {/if}
-          {#each sketches as sketch (sketch.sketch_id)}
-            <li
-              class="sketch-row"
-              class:active={sketch.sketch_id === activeSketchId}
-              class:row-active={sketch.sketch_id === activeSketchId}
-              class:hidden-row={!sketch.visible}
-              data-sketch-id={sketch.sketch_id}
-            >
-              <!-- 編集中のスケッチは隠せない(トグルを無効にする): 描いている最中に自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
-              <input
-                type="checkbox"
-                checked={sketch.visible}
-                disabled={sketch.sketch_id === activeSketchId}
-                onchange={(event) =>
-                  onToggleSketch(sketch.sketch_id, (event.target as HTMLInputElement).checked)}
-                title={sketch.sketch_id === activeSketchId
-                  ? '編集中のスケッチは隠せない'
-                  : sketch.visible
-                    ? 'このスケッチを隠す'
-                    : 'このスケッチを表示'}
-              />
-              {#if renamingId === sketch.sketch_id}
-                <input
-                  class="rename-input"
-                  type="text"
-                  bind:value={draft}
-                  use:focusSelect
-                  onkeydown={(event) => renameKey(event, sketch.sketch_id, sketchLabel(sketch))}
-                  onblur={() => commitRename(sketch.sketch_id, sketchLabel(sketch))}
-                />
-              {:else}
-                <button
-                  class="sketch-name row-button"
-                  onclick={() => onEnterSketch(sketch.sketch_id)}
-                  title={`${planeLabel(sketch.plane)} — ` +
-                    (sketch.visible
-                      ? 'クリックでこのスケッチに入る'
-                      : 'クリックで表示に戻してこのスケッチに入る')}
-                >
-                  {sketchLabel(sketch)}
-                </button>
-                {#if sketch.sketch_id === activeSketchId}
-                  <span class="tag on">編集中</span>
+        {#if sketchesOpen}
+          <div class="group-bulk">
+            <button id="sketches-show-all" onclick={onShowAllSketches}>全表示</button>
+            <button id="sketches-hide-all" onclick={onHideAllSketches}>全非表示</button>
+          </div>
+          <ul class="sketch-list" id="browser-sketches">
+            {#if sketches.length === 0}
+              <li class="empty dim">スケッチが無い</li>
+            {/if}
+            {#each sketches as sketch (sketch.sketch_id)}
+              <li
+                class="sketch-row"
+                class:active={sketch.sketch_id === activeSketchId}
+                class:row-active={sketch.sketch_id === activeSketchId}
+                class:hidden-row={!sketch.visible}
+                data-sketch-id={sketch.sketch_id}
+              >
+                <!-- 編集中のスケッチは隠せない(トグルを無効にする): 描いている最中に自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
+                <label class="check-hit">
+                  <input
+                    type="checkbox"
+                    checked={sketch.visible}
+                    disabled={sketch.sketch_id === activeSketchId}
+                    onchange={(event) =>
+                      onToggleSketch(sketch.sketch_id, (event.target as HTMLInputElement).checked)}
+                    title={sketch.sketch_id === activeSketchId
+                      ? '編集中のスケッチは隠せない'
+                      : sketch.visible
+                        ? 'このスケッチを隠す'
+                        : 'このスケッチを表示'}
+                  />
+                </label>
+                {#if renamingId === sketch.sketch_id}
+                  <input
+                    class="rename-input"
+                    type="text"
+                    bind:value={draft}
+                    use:focusSelect
+                    onkeydown={(event) => renameKey(event, sketch.sketch_id, sketchLabel(sketch))}
+                    onblur={() => commitRename(sketch.sketch_id, sketchLabel(sketch))}
+                  />
                 {:else}
-                  <span class="dim sketch-count">図形{sketch.entities.length}</span>
+                  <button
+                    class="sketch-name row-button"
+                    onclick={() => onEnterSketch(sketch.sketch_id)}
+                    title={`${planeLabel(sketch.plane)} — ` +
+                      (sketch.visible
+                        ? 'クリックでこのスケッチに入る'
+                        : 'クリックで表示に戻してこのスケッチに入る')}
+                  >
+                    {sketchLabel(sketch)}
+                  </button>
+                  {#if sketch.sketch_id === activeSketchId}
+                    <span class="tag on">編集中</span>
+                  {:else}
+                    <span class="dim sketch-count">{sketch.entities.length}図形</span>
+                  {/if}
+                  <button
+                    class="row-action"
+                    onclick={() => startRename(sketch.sketch_id, sketch.name ?? sketchLabel(sketch))}
+                    title="名前を変える">✎</button
+                  >
+                  <button
+                    class="row-action row-delete"
+                    onclick={() => onDeleteSketch(sketch.sketch_id)}
+                    title="このスケッチを図形ごと削除(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
+                  >
                 {/if}
-                <button
-                  class="row-action"
-                  onclick={() => startRename(sketch.sketch_id, sketch.name ?? sketchLabel(sketch))}
-                  title="名前を変える">✎</button
-                >
-                <button
-                  class="row-action"
-                  onclick={() => onDeleteSketch(sketch.sketch_id)}
-                  title="このスケッチを図形ごと消す(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
-                >
-              {/if}
-            </li>
-          {/each}
-        </ul>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
     </div>
   {/if}
@@ -383,6 +453,17 @@
     flex: 0 0 auto;
   }
 
+  /* 畳むボタンの押せる範囲を見出し行の高さいっぱいまで広げる(見た目の寸法は変えない)。 */
+  #browser-collapse {
+    position: relative;
+  }
+
+  #browser-collapse::after {
+    content: '';
+    position: absolute;
+    inset: -5px -4px -5px -8px;
+  }
+
   .browser-panel.collapsed .browser-header {
     border-bottom: none;
   }
@@ -418,6 +499,16 @@
 
   .group-name {
     color: var(--text);
+  }
+
+  /* 見出しの名前側を丸ごと押せる面にする(右の件数は押せない)。 */
+  .group-toggle {
+    flex: 1 1 auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    text-align: left;
   }
 
   .group-bulk {
@@ -506,10 +597,24 @@
     visibility: hidden;
   }
 
+  /* 確認なしで消える ✕ は、改名の ✎ から離して行の右端に置く(隣り合わせの押し間違いを避ける)。 */
+  .row-delete {
+    margin-left: 12px;
+  }
+
   .parts-row:hover .row-action,
   .sketch-row:hover .row-action,
   .row-action:focus-visible {
     visibility: visible;
+  }
+
+  /* チェックの周りを押せる面にする。padding と負の margin が相殺するので、行の寸法と並びは変わらない。
+     名前の文字までは広げない: 名前を押して誤って隠す事故を避けるため。 */
+  .check-hit {
+    display: flex;
+    flex: 0 0 auto;
+    padding: 3px 5px;
+    margin: -3px -5px;
   }
 
   .rename-input {

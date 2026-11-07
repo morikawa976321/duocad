@@ -79,3 +79,27 @@ export function upForDirection(d: readonly [number, number, number]): [number, n
   // `+ 0` で `-0` を `0` にする(`Object.is` ベースの `assert.deepEqual` strict で食い違うため)。
   return [ux / length + 0, uy / length + 0, uz / length + 0]
 }
+
+/**
+ * 正対判定の許容角[度]。置いた値で、実測ではない。
+ * 正対のつもりの視点が数度ずれても、その面を押せば反対側へ回るようにする。
+ */
+export const FACING_TOLERANCE_DEG = 3
+
+/**
+ * 面セル(`|i|+|j|+|k|=1`)を押したとき、視点がその面をすでに向いていれば反対側の面の向きを返す(そうでなければ `null`)。
+ * `viewDir` は注視点からカメラへの向き(正規化していなくてよい)。辺・角セルは常に `null`。
+ */
+export function oppositeFaceIfFacing(
+  i: number,
+  j: number,
+  k: number,
+  viewDir: readonly [number, number, number],
+): [number, number, number] | null {
+  if (Math.abs(i) + Math.abs(j) + Math.abs(k) !== 1) return null
+  const length = Math.hypot(viewDir[0], viewDir[1], viewDir[2])
+  if (length < 1e-9) return null
+  const cos = (viewDir[0] * i + viewDir[1] * j + viewDir[2] * k) / length
+  if (cos < Math.cos((FACING_TOLERANCE_DEG * Math.PI) / 180)) return null
+  return [-i + 0, -j + 0, -k + 0]
+}

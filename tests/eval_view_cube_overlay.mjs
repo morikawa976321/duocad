@@ -43,15 +43,24 @@ function setup() {
 
 const { createViewCubeOverlay } = await import('../web/src/viewCubeOverlay.ts')
 
-function makeCube(env) {
+function makeCube(env, cameraPosition = [0, -10, 0]) {
   const perspective = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
+  perspective.position.set(...cameraPosition)
   const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100)
-  return createViewCubeOverlay({
-    renderer: { domElement: env.domElement },
+  const cube = createViewCubeOverlay({
+    renderer: {
+      domElement: env.domElement,
+      clearDepth() {},
+      setViewport() {},
+      setScissor() {},
+      setScissorTest() {},
+      render: (scene) => scene.updateMatrixWorld(),
+    },
     camera: () => perspective,
     perspective,
     orthographic,
     controls: {
+      target: new THREE.Vector3(),
       rotateSpeed: 1,
       rotateLeft() {},
       rotateUp() {},
@@ -59,6 +68,9 @@ function makeCube(env) {
     size: () => ({ width: 1000, height: 600 }),
     overlayOffset: () => 0,
   })
+  cube.render() // 当たりの判定は描いた第2パスの行列を使う
+  cube.camera = perspective
+  return cube
 }
 
 const down = { offsetX: 900, offsetY: 80, pointerId: 7, button: 0 }
@@ -116,6 +128,42 @@ for (const ending of ['pointerUp', 'cancel']) {
   assert.equal(cube.capturing(), true)
   cube.pointerUp({ button: 0, offsetX: 912, offsetY: 80 })
   assert.equal(env.log.exits, 1, '離したらロックを外す')
+}
+
+// --- 当たりは描いた立方体の外形だけ。矩形の余白は下のモデルへ通す。
+{
+  const env = setup()
+  const cube = makeCube(env)
+  assert.equal(cube.inside(916, 84), true, '立方体の中心は当たる')
+  assert.equal(cube.inside(850, 18), false, '矩形の角の余白は当たらない')
+  assert.equal(cube.pointerDown({ offsetX: 850, offsetY: 18, pointerId: 3, button: 0 }), false, '余白の押下をキューブが引き取っている')
+  assert.equal(cube.capturing(), false)
+  assert.equal(cube.inside(500, 300), false, '矩形の外は当たらない')
+}
+
+// --- 正対している面を押したら反対側へ回る。辺・斜めからの面は今どおりその向きへ。
+function clickAt(cube, x, y) {
+  assert.equal(cube.pointerDown({ offsetX: x, offsetY: y, pointerId: 5, button: 0 }), true)
+  cube.pointerUp({ offsetX: x, offsetY: y, button: 0 })
+  cube.stepSnap(performance.now() + 10_000)
+}
+{
+  const env = setup()
+  const cube = makeCube(env)
+  clickAt(cube, 916, 84)
+  assert.ok(cube.camera.position.y > 9.9, '前を向いて前の面を押したのに後ろへ回っていない')
+}
+{
+  const env = setup()
+  const cube = makeCube(env)
+  clickAt(cube, 916, 49) // 前の面の上の辺
+  assert.ok(cube.camera.position.y < -1 && cube.camera.position.z > 1, '辺の押下が辺の向きへ行っていない')
+}
+{
+  const env = setup()
+  const cube = makeCube(env, [10, -10, 0]) // 前と右の中間(辺の向き)
+  clickAt(cube, 916, 84)
+  assert.ok(cube.camera.position.y < -1, '斜めから見ているときは、押した面の向きへ通常どおり回る')
 }
 
 console.log('viewCubeOverlay.ts: 全ての想定を満たした')

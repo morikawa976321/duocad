@@ -21,6 +21,7 @@ from ..document import Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..sketch import add_entities, get_sketch, new_entity_id, remove_entities, require_valid_params
+from ._common import editable_sketch
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -31,6 +32,8 @@ VERB_PROJECT_OUTLINE = "project_outline"
 
 _MESH_HINT = "(メッシュボディは写せない。B-rep のボディを選ぶ)"
 _COLLAPSED = "写すと点に潰れて図形ができない(スケッチの平面に垂直な辺だけを選んでいる)"
+#: ボディの外形が空になるのは潰れたからではない(ボディには平面に垂直でない辺が必ずある)。継ぎ目が平面にある回転体などで隠線処理が影を作れない。
+_OUTLINE_EMPTY = "ボディの外形を求められない(回転体の継ぎ目が平面と重なる形など)。別の平面で試すか、辺や面を選んで写すこと"
 
 
 def _brep(doc: Document, body_id: str) -> Any:
@@ -62,9 +65,11 @@ def outline_entities(doc: Document, sketch_id: str, body_ids: Sequence[str]) -> 
     return kernel_project.outline_entities(plane, [_brep(doc, body_id) for body_id in body_ids])
 
 
-def _add_projected(doc: Document, verb: str, sketch_id: str, entities: List[dict], recorded: dict) -> Operation:
+def _add_projected(
+    doc: Document, verb: str, sketch_id: str, entities: List[dict], recorded: dict, empty_message: str = _COLLAPSED
+) -> Operation:
     if not entities:
-        raise ValueError(_COLLAPSED)
+        raise ValueError(empty_message)
     for entity in entities:
         require_valid_params(entity["kind"], entity["params"])
     sketch = get_sketch(doc, sketch_id)
@@ -86,6 +91,7 @@ def _add_projected(doc: Document, verb: str, sketch_id: str, entities: List[dict
 
 def project_to_sketch(doc: Document, sketch_id: str, targets: Sequence[dict]) -> Operation:
     """辺・面 `targets` をスケッチ `sketch_id` へ写した図形を足す。失敗したときは文書にもログにも何も残さない。"""
+    editable_sketch(doc, sketch_id)
     refs = [dict(ref) for ref in targets]
     if not refs:
         raise ValueError("project_to_sketch requires at least one edge or face")
@@ -94,10 +100,13 @@ def project_to_sketch(doc: Document, sketch_id: str, targets: Sequence[dict]) ->
 
 def project_outline(doc: Document, sketch_id: str, body_ids: Sequence[str]) -> Operation:
     """ボディ `body_ids` の影の境界をスケッチ `sketch_id` へ足す。失敗したときは文書にもログにも何も残さない。"""
+    editable_sketch(doc, sketch_id)
     bodies = [str(body_id) for body_id in body_ids]
     if not bodies:
         raise ValueError("project_outline requires at least one body")
-    return _add_projected(doc, VERB_PROJECT_OUTLINE, sketch_id, outline_entities(doc, sketch_id, bodies), {"bodies": bodies})
+    return _add_projected(
+        doc, VERB_PROJECT_OUTLINE, sketch_id, outline_entities(doc, sketch_id, bodies), {"bodies": bodies}, _OUTLINE_EMPTY
+    )
 
 
 def _do_project(document: Document, operation: Operation) -> None:

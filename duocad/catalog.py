@@ -99,6 +99,11 @@ class Param:
     #: 使い道は `duocad/agent/loop.py` のガード1つだけ。
     dimension: bool = False
 
+    def __post_init__(self) -> None:
+        # tuple は `check_arguments` の型検査(str か list だけを見る)を素通りするので、宣言の時点で落とす
+        if not isinstance(self.type, (str, list)):
+            raise TypeError(f"Param {self.name!r}: type must be a str or a list, got {self.type!r}")
+
 
 @dataclass(frozen=True)
 class Result:
@@ -366,7 +371,7 @@ PREDICATE_HELP = (
     "(1つのボディだけに掛けたいときは必ず付ける。fillet / chamfer は1つのボディの辺しか受けない)。"
     'where は全条件のAND。省略はできず、条件なし(その種別の全部)は "where": [] と書く。ORは無い。'
     '面の条件: {"op": "normal_dot_gt", "axis": "X"|"Y"|"Z"|[x,y,z], "value": 数}'
-    "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9) / "
+    "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9。曲面は面の中央での法線なので、平面だけにしたいときは kind_is plane と併用) / "
     '{"op": "area_gt", "value": 数} / '
     '{"op": "kind_is", "value": "plane"|"cylinder_full"|"cylinder_partial"|"torus"|"cone"|"bspline"|"other"}。'
     '辺の条件: {"op": "parallel_to", "axis": 軸}(直線の辺だけ。円弧などは選ばない) / {"op": "length_gt", "value": 数} / '
@@ -415,6 +420,7 @@ COMMANDS: tuple[Command, ...] = (
             "ボディの表示・非表示を切り替える。手前の部品を隠すと奥の面が選べるようになる"
             "(可視性は選択機構の一部)。操作ログには載らず undo では戻らないので、"
             "隠したものを戻すには visible=true でもう一度呼ぶこと。"
+            "隠すと、そのボディのボディ・面・辺・頂点の選択項目は選択から外れる(表示に戻しても選択は戻らない)。"
             "開いているブラウザの表示も即座に変わる。"
             "**export_step / export_stl の書き出し対象も変わる**(非表示のボディは書き出されない)。"
         ),
@@ -471,7 +477,8 @@ COMMANDS: tuple[Command, ...] = (
             "領域はスケッチ座標の面積重心も `center_uv` に返る。"
             "重心に穴をあける・重心に合わせて置くときは、重心を公式から自分で計算せず、"
             "領域・面・ボディを選んでこれで読む(押し出す前の位置決めは領域で読む)。"
-            "面は種類を `surface_kind` に、円(円弧)の辺は `radius` と `center` を、"
+            "面は種類を `surface_kind` に、円(円弧)の辺は `radius` と `center` を返す。"
+            "縮退辺は `degenerate=true` を返し円の半径・中心を返さない。"
             "スケッチの線分は長さ、楕円は周長を `length` に返す。"
             "ちょうど2項目(頂点・直線の辺・平らな面・スケッチの点・スケッチの線分・領域)なら、そのあいだの"
             "距離が `between` に返る(直線・平面は無限に延ばして測る。スケッチの線分は直線、領域はそのスケッチの"
@@ -790,6 +797,8 @@ COMMANDS: tuple[Command, ...] = (
             "対象は選択から取る(引数では受けない)。領域と面の混在は不可。"
             'スケッチの領域は set_selection(refs=[{"sketch": sketch_id, "index": 番号}]) で先に選ぶ'
             "(領域は述語では選べない。図形を1つ描いたスケッチなら番号は1)。"
+            "cut で1つのボディに離れた塊が2つ以上入ったときは、断らず成功させて警告する(ボディは分けない。"
+            "塊が離れたボディには面のオフセット・面の削除が掛けられない)。"
         ),
         params=(
             Param(
@@ -1027,7 +1036,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="thread",
-        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
+        returns=(
+            Result("body_id", "string"),
+            Result("changed_bodies", "string[]"),
+            Result("diameter", "number"),
+            Result("pitch", "number"),
+        ),
         category="feature",
         description=(
             "3Dプリントで組むボルト・ナット・ねじ穴のねじ山を作るときに呼ぶ。"
@@ -1096,7 +1110,9 @@ COMMANDS: tuple[Command, ...] = (
             "ターゲットボディ(1つ)にツールボディ(1つ以上)を作用させ、結合(union)・"
             "切り取り(cut)・交差(intersect)するときに呼ぶ。ターゲットは `target_ref` で"
             "指す(選択には入れない)。ツールは選択から取る"
-            "(ボディ、またはその面/辺/頂点で指せばよい)。演算後ターゲットの形だけが残り、ツールボディは消える。"
+            "(ボディ、またはその面/辺/頂点で指せばよい)。演算後ターゲットの形だけが残り、ツールボディは消える(keep_tool=true なら残る)。"
+            "cut でツールがどれもターゲットに触れず体積が変わらないときは断り、ツールボディは消えない。"
+            "union でツールが離れていて、離れた塊が入った1ボディになったときは、断らず成功させて警告する。"
             "intersect でツールが複数のとき target ∩ (tool1 ∪ tool2 ∪ ...)。"
         ),
         params=(
@@ -1113,6 +1129,12 @@ COMMANDS: tuple[Command, ...] = (
                 "mode",
                 "string",
                 "union(結合) / cut(切り取り) / intersect(交差)",
+            ),
+            Param(
+                "keep_tool",
+                "boolean",
+                "true=ツールボディを文書に残す(同じツールで続けて別のボディを切るとき) / false=消す(既定)",
+                required=False,
             ),
         ),
         session="boolean_body",
@@ -1240,21 +1262,21 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "dx",
                 "number",
-                "X方向の移動量(mm)。mode='translate' で必須",
+                "X方向の移動量(mm)。mode='translate' で省くと 0(3つとも省くと断る)",
                 required=False,
                 dimension=True,
             ),
             Param(
                 "dy",
                 "number",
-                "Y方向の移動量(mm)。mode='translate' で必須",
+                "Y方向の移動量(mm)。mode='translate' で省くと 0(3つとも省くと断る)",
                 required=False,
                 dimension=True,
             ),
             Param(
                 "dz",
                 "number",
-                "Z方向の移動量(mm)。mode='translate' で必須",
+                "Z方向の移動量(mm)。mode='translate' で省くと 0(3つとも省くと断る)",
                 required=False,
                 dimension=True,
             ),
@@ -1586,9 +1608,10 @@ COMMANDS: tuple[Command, ...] = (
             "間違えて作った / 要らなくなったものを消すときに呼ぶ。選択の**ボディ**"
             "(面/辺/頂点/ボディのどれで指してもよい)と**スケッチの図形**を、混ざっていても"
             "1回でまとめて削除する(1回のundoで全部戻る)。対象は選択から取る"
-            "(引数では受けない)。**領域(region)は削除できない** —— 領域は図形の配置から"
-            "計算されるものなので、選択に混ざっているとエラーになる(その領域を作っている"
-            "図形を選び直すこと)。スケッチを丸ごと消すのは delete_items。"
+            "(引数では受けない)。**領域(region)は消せない** —— 領域は図形の配置から"
+            "計算されるものなので、選択に混ざっていても無視され(その領域を作っている図形を"
+            "消せば領域も消える)、領域だけを選んでいるときはエラーになる。"
+            "スケッチを丸ごと消すのは delete_items。"
         ),
         session="delete",
         resets_selection=True,
@@ -1782,10 +1805,10 @@ COMMANDS: tuple[Command, ...] = (
                 " sketches[].entities[].entity_id をそのまま渡す。"
                 "**IDを推測して組み立てない**(存在しないIDはエラーになる)",
             ),
-            Param("dx", "number", "X方向の間隔(mm)", dimension=True),
-            Param("dy", "number", "Y方向の間隔(mm)", dimension=True),
-            Param("nx", "integer", "X方向の個数(元を含む)", dimension=True),
-            Param("ny", "integer", "Y方向の個数(元を含む)", dimension=True),
+            Param("dx", "number", "u方向(スケッチ平面の横軸)の間隔(mm)", dimension=True),
+            Param("dy", "number", "v方向(スケッチ平面の縦軸)の間隔(mm)", dimension=True),
+            Param("nx", "integer", "u方向の個数(元を含む)", dimension=True),
+            Param("ny", "integer", "v方向の個数(元を含む)", dimension=True),
         ),
         session="pattern_rectangular",
         resets_selection=True,
@@ -1854,18 +1877,23 @@ COMMANDS: tuple[Command, ...] = (
             Result("entity_ids", "string[]"),
             Result("source_name", "string"),
             Result("entity_count", "number"),
+            Result("size_mm", "number[]"),
+            Result("region_count", "number"),
+            Result("skipped", "string"),
         ),
         category="sketch",
         description=(
             "いま開いているスケッチへSVGの図形を足すときに呼ぶ。"
             "外で描いた輪郭(ロゴ・図面・アウトライン化した文字)を持ち込んで押し出したいとき用。"
             "図形は取り込んだ時点で領域として使えるので、続けて extrude を打てる。"
-            "曲線はベジエのまま入る(折れ線に落ちない)。単位はmm、"
-            "SVGが物理単位を持たなければ1ユーザー単位=1mm。"
+            "曲線はベジエのまま入る(折れ線に落ちない)。単位はmm(in・pt・pcは換算)、"
+            "SVGが物理単位を持たなければ1ユーザー単位=1mm(pxも1px=1mm)。"
+            "取り込んだ大きさは応答の size_mm、落とした文字・画像・非表示の図形の数は skipped で分かる"
+            "(大きさが違えば scale で直す)。"
         ),
         params=(
             _SKETCH_ID,
-            Param("path", "string", "読み込むSVGファイルのパス"),
+            Param("path", "string", "読み込むSVGファイルのパス(相対ならサーバの起動フォルダ基準)"),
             # **UIには出さない**(`ws=False`)。倍率は単位の合わないSVGを直すための逃げ道で、
             # 普段は要らない —— 常に出すと「毎回1.0と打つ欄」が1つ増える。
             Param(
@@ -1937,7 +1965,7 @@ COMMANDS: tuple[Command, ...] = (
             "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる。"
             "何部品あっても1操作(ログ1行・undo1回)。"
         ),
-        params=(Param("path", "string", "読み込むSTEPファイルのパス"),),
+        params=(Param("path", "string", "読み込むSTEPファイルのパス(相対ならサーバの起動フォルダ基準)"),),
         session="import_step",
         note="**STEPの読み込みはこの1 verbだけ。** 読んだ形はその場で編集できる形で入る",
     ),
@@ -2255,7 +2283,7 @@ COMMANDS: tuple[Command, ...] = (
                 "いま見えているものの外接対角[mm](上下限の丸めにだけ使う)",
                 required=False,
             ),
-            Param("focus", ("object", "null"), "細かくする面の添字をボディごとに並べたもの", required=False),
+            Param("focus", ["object", "null"], "細かくする面の添字をボディごとに並べたもの", required=False),
         ),
         session="set_view_resolution",
         ws="special",

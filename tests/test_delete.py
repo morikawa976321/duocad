@@ -227,9 +227,20 @@ def test_a_hidden_body_is_refused(session: Session) -> None:
     """隠したボディは指せない(`fillet` / `move_body` と同じ門番)。"""
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "body", "index": None}])
-    session.set_visible(body.id, False)
+    body.visible = False  # `set_visible` は選択から外すので、隠れた項目が選択に残った状態を直接作る
 
     with pytest.raises(ValueError, match="hidden"):
+        session.delete()
+    assert body.id in _body_ids(session)
+
+
+def test_a_body_hidden_after_it_was_selected_is_not_deleted(session: Session) -> None:
+    """隠すと選択から外れるので、隠したボディは削除の対象にならない。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+    session.set_visible(body.id, False)
+
+    with pytest.raises(ValueError):
         session.delete()
     assert body.id in _body_ids(session)
 

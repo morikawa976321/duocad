@@ -13,13 +13,17 @@ export function isImeKey(event: { isComposing?: boolean; keyCode?: number }): bo
 /** Enter を自分で処理するフォーカス先のタグ。グローバルな Enter でコマンドを確定してはならない相手。 */
 const ENTER_OWNING_TAGS = new Set(['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT', 'A', 'SUMMARY'])
 
+/** Enter に何も割り当てていない `<input>` の型。表示のチェックボックスやスライダーにフォーカスが残っていても、Enter は窓のものにする。 */
+const ENTER_IDLE_INPUT_TYPES = new Set(['checkbox', 'radio', 'range'])
+
 /**
  * フォーカス先が Enter を自分の操作に使うか(入力欄・ボタン・選択肢・リンク・開閉・編集可能な要素)。
  * 偽のときだけ、窓の Enter がコマンドの確定になる。ボタンを除くのは、フォーカスの残ったボタン(undo など)の Enter を奪うと
  * そのボタンでなくコマンドが確定するから。選択肢も同じ(AI パネルの思考の設定にフォーカスがある Enter)。
  */
-export function ownsEnterKey(target: { tagName?: string; isContentEditable?: boolean } | null): boolean {
+export function ownsEnterKey(target: { tagName?: string; type?: string; isContentEditable?: boolean } | null): boolean {
   if (target === null) return false
+  if (target.tagName === 'INPUT' && ENTER_IDLE_INPUT_TYPES.has((target.type ?? 'text').toLowerCase())) return false
   return ENTER_OWNING_TAGS.has(target.tagName ?? '') || target.isContentEditable === true
 }
 

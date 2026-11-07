@@ -29,7 +29,7 @@ from . import (
     selection,
 )
 from .autosave import Autosave
-from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
+from .workspace import CommandState, NoCommand, Workspace, merge_args, shape_ref_bodies, stageable, stageable_verb_names
 from .document import Document
 from .document_store import DocumentStore, _RESERVED_WINDOWS_NAMES
 from .entry import entries, entry_for, preview_fallback_for
@@ -61,6 +61,20 @@ class NoDocument(ValueError):
     """文書を開いていない(トップ画面)のに、文書を変える操作が来た(`Session._edits_document`)。
     素通しすると最初の変更で自動保存が `untitled-<n>.json` を作り、「何も開いていない」が黙って「無題の文書」になる。
     """
+
+
+def _history_edge(message: str) -> ValueError:
+    """履歴の端での取り消し・やり直し。`envelope_kind` は `net/ws.py` が `error` の封筒に載せる(画面は文言でなく印で灰色の知らせにする)。
+    属性名を `kind` にしない(選択の例外が「要る図形の種別」の意味で持っているので、封筒の `kind` に流れ込む)。
+    例外名は `ValueError` のまま(MCP の応答が例外名を載せるので、新しい型にすると名前が変わる)。"""
+    error = ValueError(message)
+    error.envelope_kind = "history_edge"  # type: ignore[attr-defined]
+    return error
+
+
+def _dropped_args(names: list[str]) -> dict:
+    """verb / undo / redo の応答に、外した構えの引数の名前を載せる(無ければ載せない)。"""
+    return {"dropped_args": names} if names else {}
 
 
 #: 書き出し先に認める拡張子(小文字。`DocumentStore.resolve_export_path`)。
@@ -540,7 +554,7 @@ class Session:
         merged = merge_args(command, current.args, args or {})
         if (
             "sketch_id" not in merged
-            and any(p.name == "sketch_id" for p in command.params)
+            and any(p.name == "sketch_id" and p.required for p in command.params)
             and self.workspace.editing_sketch() is not None
         ):
             merged["sketch_id"] = self.workspace.editing_sketch()
@@ -607,8 +621,31 @@ class Session:
         self.workspace.command = None
         self.workspace.bump()
 
-    def _settle_workspace(self, verb: Optional[str], extra: Optional[dict]) -> None:
+    def _staged_shapes(self) -> dict:
+        """構えたコマンドの引数が形の添字(面・辺・頂点の番号)で指しているボディの、いまの形。undo / redo / verb の適用の前に控え、
+        `_settle_workspace` が後の形と見比べる(形が変わると添字が今の形の別の部分を指す)。"""
+        command = self.workspace.command
+        if command is None:
+            return {}
+        return {body_id: self._shape_of(body_id) for ids in shape_ref_bodies(command.args).values() for body_id in ids}
+
+    def _shape_of(self, body_id: str) -> Optional[tuple]:
+        try:
+            body = self.document.get_body(body_id)
+        except KeyError:
+            return None
+        return (body.shape, body.mesh)
+
+    def _shape_changed(self, body_id: str, before: Optional[tuple]) -> bool:
+        """`_shape_of` が控えた形から差し替わったか。形の同一性で見る(`==` は OCCT の同一判定を呼ぶので使わない)。"""
+        now = self._shape_of(body_id)
+        if before is None or now is None:
+            return before is not now
+        return now[0] is not before[0] or now[1] is not before[1]
+
+    def _settle_workspace(self, verb: Optional[str], extra: Optional[dict], staged: Optional[dict] = None) -> list[str]:
         """verb の適用・undo・redo の後で作業空間を整える(配る前に呼ぶ: 配信する状態に反映させる)。
+        形が変わったボディの面・辺・頂点を指していた構えの引数を外し、その引数名を返す(画面が1行で知らせる)。
 
         - 構えていた verb が確定したら畳む。一発の verb(`fillet(radius)` / 画面の Enter)が同じ名前で通ったときも同じ。
           別の verb なら触らない(その verb の選択リセットで対象は消えるが、起動は人の意思なので勝手に閉じない)
@@ -618,8 +655,16 @@ class Session:
         プレビュー(投機実行)の間は触らない —— 投機的に通った verb で構えを畳むと、確定していないのに画面の欄が消える。
         """
         if self._suppress_events:
-            return
+            return []
         changed = False
+        dropped: list[str] = []
+        if self.workspace.command is not None and self.workspace.command.verb != verb and staged:
+            for name, ids in shape_ref_bodies(self.workspace.command.args).items():
+                if any(body_id in staged and self._shape_changed(body_id, staged[body_id]) for body_id in ids):
+                    dropped.append(name)
+            for name in dropped:
+                del self.workspace.command.args[name]
+            changed = bool(dropped)
         if self.workspace.command is not None and self.workspace.command.verb == verb:
             self.workspace.command = None
             changed = True
@@ -634,6 +679,7 @@ class Session:
             changed = True
         if changed:
             self.workspace.bump()
+        return dropped
 
     def _command_event(self, client_op: Optional[int]) -> dict:
         return {"change": "command", "command": self.workspace.command_state(), "client_op": client_op}
@@ -802,22 +848,24 @@ class Session:
     def undo(self) -> dict:
         """直前の操作を取り消す。"""
         if not self.document.log.entries:
-            raise ValueError("取り消せる操作が無い")
+            raise _history_edge("取り消せる操作が無い")
+        staged = self._staged_shapes()
         operation = self.document.log.undo(self.document)
         if operation is None:
-            raise ValueError("取り消せる操作が無い")
+            raise _history_edge("取り消せる操作が無い")
         self._reset_selection_if_needed("undo")
-        self._settle_workspace(None, None)
-        return self._emit({"verb": "undo", "seq": operation.seq, "undone": operation.verb})
+        dropped = self._settle_workspace(None, None, staged)
+        return self._emit({"verb": "undo", "seq": operation.seq, "undone": operation.verb, **_dropped_args(dropped)})
 
     @_edits_document
     def redo(self) -> dict:
+        staged = self._staged_shapes()
         operation = self.document.log.redo(self.document)
         if operation is None:
-            raise ValueError("やり直せる操作が無い")
+            raise _history_edge("やり直せる操作が無い")
         self._reset_selection_if_needed("redo")
-        self._settle_workspace(None, None)
-        return self._emit({"verb": "redo", "seq": operation.seq, "redone": operation.verb})
+        dropped = self._settle_workspace(None, None, staged)
+        return self._emit({"verb": "redo", "seq": operation.seq, "redone": operation.verb, **_dropped_args(dropped)})
 
     # ---------------------------------------------------------------- verb の適用
     def apply(self, verb: str, args: Optional[dict] = None) -> dict:
@@ -834,15 +882,21 @@ class Session:
             raise DocumentBusy(
                 f"形状最適化の実行中は文書を変えられない({verb})。終わるか中断してから操作すること"
             )
-        return self._after_logged_verb(function(self.document, **(args or {})))
+        staged = self._staged_shapes()
+        redo_before = self.document.log.redo_count
+        return self._after_logged_verb(function(self.document, **(args or {})), staged, redo_before)
 
-    def _after_logged_verb(self, extra: Optional[dict] = None) -> dict:
-        """直前にログへ積まれたverbについて変更イベントを発火する。"""
+    def _after_logged_verb(self, extra: Optional[dict] = None, staged: Optional[dict] = None, redo_before: int = 0) -> dict:
+        """直前にログへ積まれたverbについて変更イベントを発火する。`staged` / `redo_before` は適用の前に控えた値
+        (`_staged_shapes` / やり直せる件数)。無ければ、構えた引数の参照も捨てたやり直しも数えない。"""
         operation = self.document.log.entries[-1]
         self._applied_count += 1
         self._reset_selection_if_needed(operation.verb)
-        self._settle_workspace(operation.verb, extra)
-        payload: dict[str, Any] = {"verb": operation.verb, "seq": operation.seq}
+        dropped = self._settle_workspace(operation.verb, extra, staged)
+        payload: dict[str, Any] = {"verb": operation.verb, "seq": operation.seq, **_dropped_args(dropped)}
+        discarded = redo_before - self.document.log.redo_count
+        if discarded > 0:
+            payload["discarded_redo"] = discarded
         if extra:
             payload.update(extra)
             # 入口が返す `warning`(断らずに確定した注意。`thread` の隙間が推奨の外など)を警告のトーストへ。
@@ -1230,7 +1284,9 @@ class Session:
         人が名前を付ける口(ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否(上書きの口は持たない。`copy_document` と同じ)。
         無題で何も変えていない文書(ファイルがまだ無い)は、その名前で空の文書を書く。
         """
+        # `resolve()` は既にあるファイルの綴りに直すので、打った綴りで組み直す(大文字小文字だけの改名を残すため)。
         target = self.store.resolve_writable_name(name)
+        target = target.with_name(str(name))
         # 閉じている間に通すと、空の文書がその名前で書かれる(トップ画面のまま新規ファイルが増える)。
         self._require_open()
         if self._document_locked():
@@ -1238,7 +1294,7 @@ class Session:
             raise ValueError(
                 f"形状最適化の実行中は名前を変えられない({self.optimizing_name or '無題の文書'} の実行が終わるか中断してから)"
             )
-        if target.exists():
+        if target.exists() and not self.store.is_respelling(self._current_name, target):
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
         if self._current_name is None:
             return dict(self.save_document(target.name), action="rename", previous=None)
@@ -1442,6 +1498,7 @@ class Session:
             "deviation": io_step.STL_DEVIATION,
             "body_ids": exported["body_ids"],
             "skipped_hidden": exported["skipped_hidden"],
+            "overwrote": exported["overwrote"],
         }
 
     def take_warnings(self) -> list[str]:

@@ -27,9 +27,7 @@ from typing import Any, Dict, Mapping, Optional
 from . import kernel_worker
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
-
-#: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。改名機能は未実装)
-PARAMETER_PREFIX = "d"
+from .parameter_table import ParameterTable
 
 VERB_SET_PARAMETER = "set_parameter"
 
@@ -39,11 +37,11 @@ _REBUILDING = False
 
 def register_value(doc: Document, value: float) -> str:
     """数値を名前つきの値として登録し、その名前(`d1` `d2` …)を返す。"""
-    number = 1
-    while f"{PARAMETER_PREFIX}{number}" in doc.parameters:
-        number += 1
-    name = f"{PARAMETER_PREFIX}{number}"
-    doc.parameters[name] = float(value)
+    table = doc.parameters
+    if not isinstance(table, ParameterTable):
+        table = doc.parameters = ParameterTable(table)
+    name = table.first_free_name()
+    table[name] = float(value)
     return name
 
 
@@ -93,7 +91,7 @@ def is_positive_int(value: Any) -> bool:
     if isinstance(value, int):
         return value >= 1
     if isinstance(value, float):
-        return value >= 1 and value == int(value)
+        return math.isfinite(value) and value >= 1 and value == int(value)
     return False
 
 
@@ -104,7 +102,7 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
     弾く。素通りすると、半径0は以後 `regions()` が毎回失敗し、NaNは**同じスケッチの正常な
     領域まで黙って消し**、`to_json()` が裸のNaNを吐いてJSONが壊れる(復旧はundoだけ)。
     """
-    from .sketch import require_valid_params
+    from .sketch import require_new_arc_sweep, require_valid_params
 
     if not math.isfinite(value):
         raise ValueError(f"parameter {name!r} must be a finite number, got {value!r}")
@@ -117,6 +115,8 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
                     for key, ref in entity.params.items()
                 }
                 require_valid_params(entity.kind, candidate)
+                if entity.kind == "arc" and name in (entity.params["start_deg"], entity.params["end_deg"]):
+                    require_new_arc_sweep(candidate["start_deg"], candidate["end_deg"])
         for pattern in sketch.patterns:
             for key, ref in pattern.params.items():
                 if ref == name and key in ("nx", "ny", "count") and not is_positive_int(value):
@@ -204,6 +204,10 @@ def rebuild(
     doc.bodies.clear()
     doc.sketches.clear()
     doc.parameters.clear()
+    # 最適化の verb はすべて代入なので、空から再生し直しても結果は変わらない。空にしないと、除外から保持へ移したボディが
+    # 再生の途中で反対の役割と衝突する。版は戻さず進める(画面が古い割り当てを描き続けない)。
+    vars(doc.optimize).update({key: value for key, value in vars(type(doc.optimize)()).items() if key != "revision"})
+    doc.optimize.touch()
 
     _REBUILDING = True
     try:

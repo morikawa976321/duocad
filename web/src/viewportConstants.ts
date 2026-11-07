@@ -345,7 +345,6 @@ export const HOME_VIEW_OFFSET = new THREE.Vector3(1, -1, 0.6)
 
 /** クリックとドラッグ(視点回転)の境目。これ以上動いたら選択ではなく回転とみなす。 */
 export const CLICK_MOVE_LIMIT_PX = 6
-export const CLICK_TIME_LIMIT_MS = 500
 
 /**
  * ホバー強調で上げる明度(HSLのL)。3色目は足さない: 色相=選択されているか(橙)、

@@ -280,8 +280,8 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 
 ### 表の作り方
 
-1. 面の三角形を、辺長が`sample_ratio * spacing`(既定0.25)以下になるまで細分し、各小三角形の重心を標本点にする。
-2. 各標本点から半径`radius_ratio * spacing`(既定**1.0**)の球に入る節点へ、テント重み`1 - d/radius`で面積を配る(標本ごとに重みの和で正規化)。
+1. 面の三角形を、辺長が`DEFAULT_SAMPLE_RATIO * spacing`(0.25)以下になるまで細分し、各小三角形の重心を標本点にする。
+2. 各標本点から半径`DEFAULT_RADIUS_RATIO * spacing`(**1.0**)の球に入る節点へ、テント重み`1 - d/radius`で面積を配る(標本ごとに重みの和で正規化)。
    `radius >= sqrt(3)/2 * spacing`でないと「どの節点も球に入らない標本点」が出て荷重が特定の節点へ集中する。
 3. 1つの節点が複数の面の球に入りうる(稜線付近)ので、最後に**持ち主**を決める。
 
@@ -472,8 +472,8 @@ Taubin 30回は1セル幅の構造を消すフィルタとして働くので、�
 
 点群の階数不足・非有限値・箱の裏返り・Qhullの失敗は`DesignSpaceGeometryError`/`ValueError`(ランダム摂動や黙った退避は無い)。6近傍の接続は「材料を置ける道がある」ことであって、部材幅や剛性の保証ではない。
 
-**呼び出し経路**: `optimize_run.run` → `trace.recording` の中で `design_space.derive`(塊を1回導出)→ 条件面・保持/除外の点検(空の条件面 / 表現できていない領域は早期return)→ `binary_search.find_best_feasible`(`find_initial_feasible`=全材料を6条件で1回検査 →
-`_reduce_volume`=段階4)→ `thin_voids.fill_tubes`(埋めたセルがあれば `acceptance.inspect` で6条件を取り直す)→ `mesh.build_surface_from_mask`(確定マスクだけ)→ `finalize.finalize`(平滑化後の表面を検査 → 保持を足し除外を引く → 簡略化 → 接続6項目・単一ソリッド・float32・自己交差で検査)→
+**呼び出し経路**: `optimize_run.run` は記録(`trace.recording`)と進捗・結果のイベント(`RunEvents`)を作るだけで、本体は `optimize_pipeline.execute`(`_run` が委譲する)。`resolve_conditions`(条件・解像度・最小幅・探索目標の確定)→ `prepare_search`(`design_space.derive` で塊を1回導出 → 条件面・保持/除外の点検(空の条件面 / 表現できていない領域は早期return)→ 境界条件の確定)→ `search`(`binary_search.find_best_feasible`: `find_initial_feasible`=全材料を6条件で1回検査 →
+`_reduce_volume`=段階4)→ `make_finish_plan` → `optimize_finish.finish_shape`。完成化は `topopt/complete.py`: `thin_voids.fill_tubes`(埋めたセルがあれば `acceptance.inspect` で6条件を取り直す)→ `mesh.build_surface_from_mask`(確定マスクだけ)→ `finalize.finalize`(平滑化後の表面を検査 → 保持を足し除外を引く → 簡略化 → 接続6項目・単一ソリッド・float32・自己交差で検査)→
 `final_check.inspect`(完成メッシュを 0.67 mm 以下になる分割数(`final_check.MEASURE_SPACING_MM`)で解き直す。要素数・メモリの上限に収まらないときだけ分割数を下げ、それより粗い間隔で測った応力には `coarse_penalty` の割り増しを掛ける + `neck_persistence`。目標を割れば、まず探索の合格形をさかのぼって通る形を探し、通る形が無いときだけ `final_unsafe` で結果を足さない。#129)→ `add_mesh_body`。**候補中はメッシュ化を呼ばない。**
 
 ### 境界条件の確定(2026-09-17)
@@ -500,7 +500,7 @@ Taubin 30回は1セル幅の構造を消すフィルタとして働くので、�
 
 余白0.20・距離(現在の既定)は最終設計空間 **367,390 セル**(`check_design_space.py` の `HANGER_EXPECTED`)、余白0.25・平面オフセットは 522,424 セル。保持のはみ出し/取りこぼしはどちらも 0/0。画像は [docs/images/design_space_case1_vs_hull_hanger.png](images/design_space_case1_vs_hull_hanger.png)。**幾何の被覆の確認であって構造性能の確認ではない**——凸包だから最適解を必ず含むという保証は置かない。
 
-## duocad 本体への配線・設計と画面(`duocad/optimize_run.py`)
+## duocad 本体への配線・設計と画面(`duocad/optimize_run.py`・`optimize_pipeline.py`・`optimize_finish.py`)
 
 条件を置く4 verb(`set_preserve_bodies`/`set_exclude_bodies`/`set_fixtures`/`set_loads`)の続きが`duocad/optimize_run.py`。verbは1本も足していない——結果を文書へ入れる口は既存の`add_mesh_body`だけで、
 **元のボディは1つも消さず・形も差し替えない**(最適化は編集ではなく「条件から新しい形を1つ作る」操作)。口は`Session.optimize_conditions()`・`optimize_resolution(...)`・`run_optimization(...)`・`cancel_optimization()`(旗を立てるだけ)。
@@ -541,7 +541,7 @@ WebSocket に口がある(`optimize_conditions`/`optimize_resolution`/`optimize_
 - **重い処理は`asyncio.to_thread`で回し、中断の旗を畳むのは別スレッドへ投げる前**(`Session.begin_optimization` が `OptimizationRun` を作る。開始元・作業コピー・中断と仕上げの受付は実行が持ち、ワーカーでは要求を初期化しない)。接続した画面には最初に`optimize_status`を送る(再読み込みした画面が中断ボタンを失わないため)。
 - **結果を足した(`state == "done"`)ときだけ、足した直後に`save_document()`でディスクへ書く**。進捗も結果もサーバプロセス1つのメモリにしか無く、プロセスが入れ替わると消える(2026-09-13実測: 数時間の実行が保存前のプロセス入れ替えで消失)。落としていけないのはブラウザタブではなくサーバプロセスとPCのスリープ。
 - **解像度は「既定＝粗い側の端。細かくする方向にだけ動く目盛り」**(`resolution_limits()["steps"]`、添字0が既定)。粗い側の端は正しさの境界(silent に条件面から節点が消える)、細かい側の端は都合の境界(遅い・落ちる)。各段に予想時間は付けない。
-- 通知はトーストとパネルの二重(トーストは8秒で消えるので「結果が信用できない」という文はパネルの`#optimize-notice`に残す)。中断はエラー扱いにしない。
+- 通知はトーストとパネルの二重(トーストは15秒で消えるので「結果が信用できない」という文はパネルの`#optimize-notice`に残す)。中断はエラー扱いにしない。
 - **実行中は走らせている文書を変える操作をすべて断る**(`Session` の `DocumentBusy`。選択・表示・保存・書き出しは通す)。途中で変えると古い条件の形が足される(issue #26)。ブラウザ・MCP・アプリ内AIはどれも `Session` を通るので1箇所で止まる。
 - **走らせたまま別の文書へ移って編集してよい**(2026-10-04 本人指示)。結果はイベントループ上の `Session.deliver_optimization_result` が実行の作業コピーから開始元へ反映する。開いたままならその文書へ、別の文書を開いていれば `OptimizationResults` が開始元のファイルへ書く。書けなかった文書と未表示の封筒も同部品が名前ごとに控え、次にそのファイルを開くと結果入りで開き、通知を一度だけ全接続へ配る。走らせているファイルの改名・別名保存・削除は断る。同時に走らせられるのは1本だけ(上の太字「メモリ」の段落にある 1.6 mm の実測から、2本は収まらない)。
 - **ステップと再仕上げの前提は `OptimizationRecord` が持つ**。`Optimization` は実行を終了しても記録を残し、次の探索で置き換える。再仕上げでは同じ記録を使う。`OptimizationSteps`・`finisher` の計算の仕組みはそのままで、WS は Session の窓口で仕上げ手段と前提の一致を確かめる。
@@ -595,7 +595,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 
 ## 受入検査が見ているもの
 
-**走らせ方は`readme.md`§3。** 各`check_*.py`の項目は、それぞれの先頭のdocstringが正。どれも最後の行が`OK:`で、終了コードが0なら合格。見落とすと検査が空振りになる勘所だけを残す:
+**走らせ方は[DEVELOPMENT.md](DEVELOPMENT.md)§3「自動検査の走らせ方」。** 各`check_*.py`の項目は、それぞれの先頭のdocstringが正。どれも最後の行が`OK:`で、終了コードが0なら合格。見落とすと検査が空振りになる勘所だけを残す:
 
 - **`check_mesh.py`**: 並進不変の検査では**全軸を一律に半セルずらす**類のバグを検出できない(2026-08-30にQAが実データで発見)ので、既知の位置に置いた合成密度場で面のバウンディングボックスを見る検査8がある。面の向き(巻き順)を見るのは検査9だけで、
   STL経路しか通らないため`mr.faces`を直接使う消費者(`add_mesh_body`→`viewport.ts`)が内向きのまま残る事故を捕まえられなかった(2026-09-02発見)。

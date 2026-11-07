@@ -178,7 +178,7 @@ def test_the_view_follows_the_camera_for_solids_edges_and_regions(cylinder_sessi
     base_edge_points = _edge_points(session, body_id)
     base_triangles = _triangles(session, body_id)
     base_region_points = len(_region(session, sketch_id)["positions"])
-    assert base_deviation == pytest.approx(DEVIATION), "ズーム値が来る前は土台の粗さ"
+    assert base_deviation == pytest.approx(resolution.document_resolution(SIDE * math.sqrt(3.0))[0]), "ズーム値が来る前は文書の外接対角から決めた粗さ"
 
     # 寄る(1画素 = 0.002mm)
     assert session.set_view_resolution(0.002, SIDE) is True

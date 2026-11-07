@@ -66,8 +66,33 @@ export function hiddenResultNotice(result: Pick<AiRunResult, 'status' | 'text'>)
 /**
  * 入力を止める理由(送れるなら null)。繋がっていないときに送らせない: 送れなかった発話が会話欄に残り、
  * 打った文だけが入力欄から消える。`aiStatusKnown` はサーバから `ai_status` が届いたか(届くまで何に繋ぐか分からない)。
+ * `keyMissing` は Claude を選んでいて鍵が無い(送っても断られるだけで、打った文が入力欄から消える)。
  */
-export function inputBlockedReason(connection: ConnectionStatus, aiStatusKnown: boolean): string | null {
+export function inputBlockedReason(
+  connection: ConnectionStatus,
+  aiStatusKnown: boolean,
+  keyMissing = false,
+): string | null {
   if (connection !== 'open') return 'サーバに繋がっていない(繋ぎ直している)'
-  return aiStatusKnown ? null : '接続を待っている'
+  if (!aiStatusKnown) return '接続を待っている'
+  return keyMissing ? 'APIキーが未設定(ヘッダーの「設定」から置ける)' : null
+}
+
+/**
+ * 往復の使用量(`ai_result.usage`)を1行にする。Claude は課金の単位のトークン数で、`input_tokens` はキャッシュの読み・書きを含まない別枠なので
+ * 足し算で書く。llama-server は `timings` を往復ぶん足した値(時間)。どちらも返さないサーバでは空文字(行ごと出さない)。
+ */
+export function usageLine(usage: Record<string, number> | undefined): string {
+  if (usage?.input_tokens !== undefined && usage.output_tokens !== undefined) {
+    return (
+      `入力(新規) ${usage.input_tokens} + キャッシュ読み ${usage.cache_read_input_tokens ?? 0}` +
+      ` + キャッシュ書き ${usage.cache_creation_input_tokens ?? 0} ／ 出力 ${usage.output_tokens} トークン`
+    )
+  }
+  if (usage?.prompt_n === undefined || usage.predicted_n === undefined) return ''
+  const seconds = (ms: number | undefined): string => ((ms ?? 0) / 1000).toFixed(1)
+  return (
+    `読み ${usage.prompt_n}(再利用 ${usage.cache_n ?? 0})トークン ${seconds(usage.prompt_ms)}秒` +
+    ` ／ 書き ${usage.predicted_n} トークン ${seconds(usage.predicted_ms)}秒`
+  )
 }

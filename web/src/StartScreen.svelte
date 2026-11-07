@@ -4,6 +4,8 @@
    * 作業面は丸ごと見せず、空の無題の文書(「新規」直後)と見た瞬間に区別できるようにする。
    * できるのは開くことだけ。複製・削除・改名は `FilesPanel.svelte`。一覧はサーバの `list_documents` の写し。
    */
+  import { tick } from 'svelte'
+  import { formatStamp } from './formatStamp'
   import type { DocumentInfo } from './session'
 
   let {
@@ -35,11 +37,17 @@
     for (const file of recent) onNeedThumbnail(file.name, file.thumb)
   })
 
-  function stamp(epochSeconds: number): string {
-    const date = new Date(epochSeconds * 1000)
-    const pad = (value: number) => String(value).padStart(2, '0')
-    return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-  }
+  // 先頭(いちばん新しい)のカードにフォーカスを置き、Enter 1回で前回の文書を開けるようにする。
+  // 一覧が届くのは最初の状態より後のことがあるので、カードが出た最初の1回だけ置く(別の欄に打っている最中は奪わない)。
+  let focusedFirstCard = false
+  $effect(() => {
+    if (waiting || recent.length === 0 || focusedFirstCard) return
+    focusedFirstCard = true
+    void tick().then(() => {
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+      document.querySelector<HTMLButtonElement>('#start-recent .start-card')?.focus()
+    })
+  })
 </script>
 
 <div class="start-screen" id="start-screen">
@@ -72,7 +80,7 @@
                 {/if}
               </span>
               <span class="start-name">{file.name}</span>
-              <span class="start-date dim">{stamp(file.mtime)}</span>
+              <span class="start-date dim">{formatStamp(file.mtime)}</span>
             </button>
           {/each}
         </div>

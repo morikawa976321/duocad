@@ -64,9 +64,12 @@ register_verb(VERB_THREAD, do=_do_thread, undo=undo_shape)
 @entry(VERB_THREAD)
 def _enter_thread(document: Document, profile: str, clearance: Optional[float] = None) -> dict:
     item = selection.require_selected(document, "face", exactly_one=True)[0]
+    # 刻む前の面から呼び径を読む(刻んだ後は面の番号が変わる)。画面が確定の知らせに「M10 P1.5」と出すのに使う。
+    before = editable_body(document, item["body"], what="thread")
+    diameter = 2 * kernel_thread.describe_target(before.shape, int(item["index"]))["radius"]
     operation = thread(document, int(item["index"]), profile, clearance, body_id=item["body"])
     changed = operation.args["body_id"]
-    out = {"body_id": changed, "changed_bodies": [changed]}
+    out = {"body_id": changed, "changed_bodies": [changed], "diameter": round(diameter, 3), "pitch": operation.args["pitch"]}
     warning = kernel_thread.clearance_warning(profile, operation.provenance["female"], operation.args["clearance"])
     if warning:
         out["warning"] = warning  # `Session._after_logged_verb` が確定のときだけ警告のトーストへ積む

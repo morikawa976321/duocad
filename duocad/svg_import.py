@@ -7,7 +7,7 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 
 **単位は `ppi=25.4` で解決する。** svgelementsは既定(96ppi)だと全長をpxへ正規化し、
 `width="100mm"` が377.95になる。25.4を渡すと物理単位のSVGは**寸法がそのままmm**、
-`viewBox` だけのSVGは**1ユーザー単位 = 1mm** になる。
+`viewBox` だけのSVGは**1ユーザー単位 = 1mm** になる。`pt` `pc` も同じ `ppi` で解く(`_typographic_units_by_ppi`)。
 
 **物理単位のSVGには 0.54ppm の系統的なずれがある**(実測)。svgelementsがmm→pxにCSSの丸めた
 定数(3.7795296。厳密には 96/25.4)を使うため `width="100mm"` は100.000054になる。
@@ -26,8 +26,10 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 (`kernel_sketch._edges_bezier` のdocstring)。半径0の弧・潰れた弧は端点を結ぶ線分(SVG 1.1 付録 F.6.2)。
 長さ0の線分・ベジエ・弧は黙って捨てる(領域を割らない。`sketch._validate_bezier` が弾く値)。
 
-**見た目は捨てる。** fill / stroke / 色 / text / image / clip-path はスケッチに意味が無い。
-`<text>` はSVG側でアウトライン化してから読ませること。
+**見た目は捨てる。** fill / stroke / 色 / opacity / text / image / clip-path はスケッチに意味が無い。
+`<text>` はSVG側でアウトライン化してから読ませること。`opacity:0` の図形も取り込む。
+`display:none` と、継承後の `visibility` が `hidden` / `collapse` の図形は描かれないので取り込まない。
+落とした `<text>` `<image>` と非表示の図形の数は `read_svg_report` が返す(取り込みの応答でそのまま知らせる)。
 
 **描画されない定義は取り込まない。** `<symbol>` `<mask>` `<marker>` は `<use>` などで参照されて初めて意味を持つ。
 `<switch>` は描かれる枝が1つだけ(条件属性 `requiredFeatures` / `requiredExtensions` / `systemLanguage` を
@@ -39,12 +41,14 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import math
 import re
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 PathLike = Union[str, Path]
 
@@ -62,6 +66,18 @@ _CIRCULAR_TOLERANCE = 1.0e-9
 _ZERO_LENGTH = 1.0e-9
 
 _SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+
+#: 描かれない `visibility` の値(`collapse` は SVG では `hidden` と同じ)。
+_HIDDEN_VISIBILITY = frozenset({"hidden", "collapse"})
+
+#: 外接箱を求めるときの曲線の標本数(分割数)。表示用の大きさで、図形の座標には使わない。
+_SIZE_SAMPLES = 64
+
+#: 1インチあたりの `pt` `pc` の数(CSS)。
+_TYPOGRAPHIC_PER_INCH = {"pt": 72.0, "pc": 6.0}
+
+#: `_typographic_units_by_ppi` の差し替えを1本ずつにする(差し替えるのは svgelements のクラスで、プロセスに1つ)。
+_LENGTH_PATCH_LOCK = threading.RLock()
 
 #: `<use>` などから呼ばれる定義。`<defs>` の外に書かれていても、そこでは描かれない。
 _UNDRAWN_DEFINITIONS = frozenset({"symbol", "mask", "marker"})
@@ -83,15 +99,24 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
 
     `entities` は `[{"kind":.., "params":{..}}, ...]`。`scale` は解決後のmmへさらに掛ける倍率。
     """
+    source_name, entities, _skipped = read_svg_report(path, scale)
+    return source_name, entities
+
+
+def read_svg_report(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dict], Dict[str, int]]:
+    """`read_svg_entities` に、取り込まなかった要素の数 `{"text":.., "image":.., "hidden":..}` を添える(0の種別は含めない)。"""
     scale = float(scale)
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError(f"scale must be a positive finite number, got {scale!r}")
 
     data = Path(path).read_bytes()  # 無ければ FileNotFoundError
     source_name = Path(path).name
-    data, width_hint, height_hint = _prepare(data)
-    svg = _parse(data, source_name, width_hint, height_hint)
-    shapes = _shapes(svg)
+    with _typographic_units_by_ppi():
+        data, width_hint, height_hint = _prepare(data)
+        svg = _parse(data, source_name, width_hint, height_hint)
+    drawn = list(svg.elements())
+    shapes = _visible_shapes(drawn)
+    _limit_corner_radii(shapes)
     height = _flip_height(svg, shapes)
 
     entities: List[dict] = []
@@ -108,12 +133,74 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
                     "画像をトレースしたSVGはこの経路では扱えない"
                     " — SVG側で単純化してから読ませること"
                 )
+    skipped = _skipped(data, drawn, len(shapes))
     if not entities:
         raise ValueError(
             f"{source_name}: 取り込める図形が無い"
-            "(text / image / 描かれない定義はスケッチに取り込めない。文字はアウトライン化してから読ませること)"
+            "(text / image / 描かれない定義 / 非表示の図形はスケッチに取り込めない。"
+            f"文字はアウトライン化してから読ませること{_skipped_clause(skipped)})"
         )
-    return source_name, entities
+    return source_name, entities, skipped
+
+
+_SKIPPED_LABELS = (("text", "文字"), ("image", "画像"), ("hidden", "非表示の図形"))
+
+
+def describe_skipped(skipped: Dict[str, int]) -> str:
+    """取り込まなかった要素の数を一文の部品にする(無ければ空文字)。例: `文字 2 個・画像 1 個`。"""
+    return "・".join(f"{label} {skipped[key]} 個" for key, label in _SKIPPED_LABELS if skipped.get(key))
+
+
+def _skipped_clause(skipped: Dict[str, int]) -> str:
+    text = describe_skipped(skipped)
+    return f"。このファイルで落とした要素: {text}" if text else ""
+
+
+def entities_size(entities: List[dict]) -> List[float]:
+    """図形全体の外接箱の `[幅, 高さ]`(mm)。円弧・ベジエは曲線上を標本して求める。図形が無ければ `[0, 0]`。"""
+    points: List[Tuple[float, float]] = []
+    for entity in entities:
+        points.extend(_outline_points(entity["kind"], entity["params"]))
+    if not points:
+        return [0.0, 0.0]
+    xs, ys = [x for x, _ in points], [y for _, y in points]
+    return [max(xs) - min(xs), max(ys) - min(ys)]
+
+
+def _outline_points(kind: str, params: dict) -> List[Tuple[float, float]]:
+    steps = [index / _SIZE_SAMPLES for index in range(_SIZE_SAMPLES + 1)]
+    if kind == "line":
+        return [(params["x0"], params["y0"]), (params["x1"], params["y1"])]
+    if kind == "bezier":
+        return [
+            tuple(
+                (1 - t) ** 3 * params[a] + 3 * (1 - t) ** 2 * t * params[b]
+                + 3 * (1 - t) * t**2 * params[c] + t**3 * params[d]
+                for a, b, c, d in (("x0", "cx1", "cx2", "x1"), ("y0", "cy1", "cy2", "y1"))
+            )
+            for t in steps
+        ]
+    if kind == "arc":
+        start, end = params["start_deg"], params["end_deg"]
+        sweep = (end - start) % 360.0 or 360.0
+        return [
+            (
+                params["cx"] + params["radius"] * math.cos(math.radians(start + sweep * t)),
+                params["cy"] + params["radius"] * math.sin(math.radians(start + sweep * t)),
+            )
+            for t in steps
+        ]
+    if kind == "ellipse":
+        angle = math.radians(params["angle"])
+        half_x, half_y = params["width"] / 2.0, params["height"] / 2.0
+        return [
+            (
+                params["cx"] + half_x * math.cos(t) * math.cos(angle) - half_y * math.sin(t) * math.sin(angle),
+                params["cy"] + half_x * math.cos(t) * math.sin(angle) + half_y * math.sin(t) * math.cos(angle),
+            )
+            for t in (math.tau * step for step in steps)
+        ]
+    return []
 
 
 # --------------------------------------------------------------------------------------
@@ -171,6 +258,35 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
         data = ET.tostring(root, encoding="utf-8")
     width, height = _viewport_defaults(root)
     return data, width, height
+
+
+@contextlib.contextmanager
+def _typographic_units_by_ppi() -> Iterator[None]:
+    """この中にいる間、svgelements の `Length.value` が `pt` `pc` を `in` と同じく `ppi` で解く。
+
+    svgelements は `pt` `pc` を px の 4/3・16 倍に決め打ちし、`ppi` を見ない。`ppi=25.4` の下では
+    `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。長さは属性・`style` 属性・`<style>` の規則・`transform` の
+    どこからでも入り、どれも `Length.value` で数になる(実測: この4経路と `<use>` の x/y、百分率の基準)ので、
+    本文を書き換えずにここを差し替える。`ppi` を渡さない呼び出し(要素を作るとき)は、この読み込みの `MM_PER_INCH` で解く。
+    """
+    from svgelements import Length
+
+    with _LENGTH_PATCH_LOCK:
+        original = Length.value
+
+        def value(self: Any, ppi: Optional[float] = None, *args: Any, **kwargs: Any) -> Any:
+            per_inch = _TYPOGRAPHIC_PER_INCH.get(str(self.units).lower())
+            if per_inch is None or self.amount is None:
+                return original(self, ppi, *args, **kwargs)
+            # 必ず数で返す(元の実装と同じ)。Length のまま残すと、svgelements の Length 同士の演算・比較が pt・pc を
+            # px の決め打ちで換算する(実測: `rx="1pt"` が幅の半分より大きいと判定され、角丸の長方形が円になる)。
+            return self.amount * (MM_PER_INCH if ppi is None else ppi) / per_inch
+
+        Length.value = value
+        try:
+            yield
+        finally:
+            Length.value = original
 
 
 def _undrawn_children(root: Any) -> List[Tuple[Any, Any]]:
@@ -256,11 +372,63 @@ def _flip_height(svg: Any, shapes: List[Any]) -> float:
     return height
 
 
-def _shapes(svg: Any) -> List[Any]:
-    """幾何を持つ要素だけを拾う。text / image はここで落ちる。"""
+def _visible_shapes(drawn: List[Any]) -> List[Any]:
+    """描かれる要素のうち、取り込む図形。
+
+    `visibility` は子へ継承され、子の `visible` で上書きできる。svgelements が継承後の値を `values` に持つ。
+    """
     from svgelements import Shape
 
-    return [element for element in svg.elements() if isinstance(element, Shape)]
+    return [
+        element
+        for element in drawn
+        if isinstance(element, Shape)
+        and str(element.values.get("visibility", "")).strip().lower() not in _HIDDEN_VISIBILITY
+    ]
+
+
+def _limit_corner_radii(shapes: List[Any]) -> None:
+    """長方形の角丸の半径を、幅・高さの半分までに抑える(SVG の規則)。
+
+    svgelements は要素を作る時点(単位を解く前)で抑えるので、半径と幅・高さの単位が違うと比べられず、抑えないまま残す
+    (実測: `width="10mm" rx="100"` が半径 100 の弧になる。`rx="100pt"`、`width="10" rx="100mm"` も同じ)。
+    大きさで比べ、符号は残す: svgelements は `transform="scale(-1,-1)"` を長方形へ畳み、幅・高さ・半径をそろって負にする
+    (実測。そのまま輪郭にすると鏡写しの正しい形になる)。
+    """
+    from svgelements import Rect
+
+    for shape in shapes:
+        if not isinstance(shape, Rect):
+            continue
+        if not all(isinstance(value, (int, float)) for value in (shape.width, shape.height, shape.rx, shape.ry)):
+            continue
+        half_width, half_height = abs(shape.width) / 2.0, abs(shape.height) / 2.0
+        if half_width > 0 and abs(shape.rx) > half_width:
+            shape.rx = math.copysign(half_width, shape.rx)
+        if half_height > 0 and abs(shape.ry) > half_height:
+            shape.ry = math.copysign(half_height, shape.ry)
+
+
+def _skipped(data: bytes, drawn: List[Any], imported: int) -> Dict[str, int]:
+    """落とした要素の数 `{"text", "image", "hidden"}`(0の種別は含めない)。非表示の図形は「本文にある図形 − 取り込む図形」。
+
+    `display:none` の図形は svgelements が読んだ時点で捨てていて `drawn` に無いので、捨てない読み方でもう一度読んで
+    数える。非表示の中身が読めないときは、描かれる分だけで数える(取り込みは止めない)。読めないのは、例外のほか、
+    読み直しが途中で終わって描かれる分より少なく返るとき(実測: `display:none` の入れ子の `<svg>` の幅が 0)。
+    """
+    from svgelements import SVG, Image, Shape, Text
+
+    try:
+        everything = list(SVG.parse(io.BytesIO(data), ppi=MM_PER_INCH, parse_display_none=True).elements())
+    except Exception:
+        everything = drawn
+    shapes_drawn = sum(isinstance(element, Shape) for element in drawn)
+    skipped = {
+        "text": sum(isinstance(element, Text) for element in drawn),
+        "image": sum(isinstance(element, Image) for element in drawn),
+        "hidden": max(sum(isinstance(element, Shape) for element in everything), shapes_drawn) - imported,
+    }
+    return {key: count for key, count in skipped.items() if count}
 
 
 def _segments(element: Any) -> List[Any]:
@@ -486,8 +654,10 @@ def _circular_arc_entity(
     start_deg, end_deg, middle_deg = angle_of(start), angle_of(end), angle_of(middle)
     if not (middle_deg - start_deg) % 360.0 < (end_deg - start_deg) % 360.0:
         start_deg, end_deg = end_deg, start_deg
-    if start_deg == end_deg:
-        return []  # `sketch._validate_arc` が弾く値(角度0の弧は辺にならない)
+    from .sketch import arc_sweep_is_degenerate
+
+    if start_deg == end_deg or arc_sweep_is_degenerate(start_deg, end_deg):
+        return []  # `sketch._validate_arc` が弾く値(角度0・誤差ほどの弧は辺にならない)
     return [
         {
             "kind": "arc",

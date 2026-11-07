@@ -501,3 +501,19 @@ def test_a_wall_and_a_central_post_with_the_same_centroid_keep_their_ids_through
     before = {body.id: round(_brep_geometry.volume(body.shape), 3) for body in doc.bodies}
     replayed = replay_through_json(doc)
     assert {body.id: round(_brep_geometry.volume(body.shape), 3) for body in replayed.bodies} == before
+
+
+def test_a_staged_split_in_sketch_mode_is_not_given_the_editing_sketch() -> None:
+    """編集中のスケッチを `sketch_id` に補うのは必須の verb だけ。省略できる `split_body.sketch_id` に補うと base_plane と排他で断られる。"""
+    from session_support import session_with_box
+
+    session = session_with_box()
+    select(session, [{"body": "box", "kind": "body"}])
+    session.move_body(-15.0, 0.0, 0.0)
+    session.apply("sketch_create", {"base_plane": "XY"})
+    select(session, [{"body": "box", "kind": "body"}])
+    session.begin_command("split_body", {"base_plane": "YZ"})
+
+    session.apply_command()
+
+    assert len(session.document.bodies) == 2

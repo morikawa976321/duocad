@@ -45,16 +45,23 @@ def read_step_source(path: PathLike) -> tuple[str, str, Any]:
     """STEPファイルを読み、`(source_name, text, 形)` を返す。`source_name` は**ファイル名だけ**、形は `text` を読んだもの。
 
     ヘッダや説明文字列にASCII外のバイトが入った実ファイルがあるため、バイト列で読み、UTF-8で読めなければ latin-1 へ落とす。
+    先頭のBOM(EF BB BF)は捨てる(残すと OCCT が STEP と認めない)。
 
     **黙って欠ける STEP は ValueError で断る**(転送に失敗した要素・ソリッドの外の面。`kernel.step_import_problems`)。
     断るのは取り込み(この関数を呼ぶ `import_step`)だけで、ログの再生は検査しない: 検査を足す前に取り込んだ文書を開けなくしない。
     """
-    data = Path(path).read_bytes()  # 無ければ FileNotFoundError
+    data = Path(path).read_bytes().removeprefix(b"\xef\xbb\xbf")  # 無ければ FileNotFoundError
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         text = data.decode("latin-1")
-    shape, problems = kernel.read_step_text_checked(text)
+    name = Path(path).name
+    try:
+        shape, problems = kernel.read_step_text_checked(text)
+    except ValueError as error:
+        # kernel の文は「埋め込まれた本文」と一時パスを言うが、ここで読んだのは画面で選んだ実ファイル
+        reason = "ファイルが空" if text.strip() == "" else "STEPの形式ではないか、壊れている"
+        raise ValueError(f"cannot import {name}: STEPとして読めない({reason})") from error
     if problems:
         raise ValueError(f"cannot import {Path(path).name}: " + " / ".join(problems))
     return Path(path).name, text, shape
@@ -67,19 +74,19 @@ def solid_names(source_name: str, count: int) -> list[str]:
 
 
 def export_step(doc: Document, path: PathLike) -> None:
-    """対象は `_bodies_to_export`(表示中のBodyのみ)。複数Bodyならcompoundへまとめる。
+    """対象は `_bodies_to_export`(表示中のBodyのみ)。Bodyごとに名前を製品名に載せる(`kernel.write_step_named`)。
 
     メッシュボディが対象に入っていたら断る(ファイルを作らない。STEPに三角形を書く先は無く、黙って落とすと形が足りない)。
     """
-    meshes = [b for b in _bodies_to_export(doc) if b.mesh is not None]
+    bodies = _bodies_to_export(doc)
+    meshes = [b for b in bodies if b.mesh is not None]
     if meshes:
         raise ValueError(
             "cannot export a mesh body to STEP: "
             f"{[b.id for b in meshes]} は三角形メッシュで、STEPには書けない。"
             "STLで書き出すか、set_visible(visible=false) で隠してから呼ぶこと"
         )
-    shape = _shape_to_export(doc)
-    kernel.write_step(shape, str(path))
+    kernel.write_step_named([(b.name, b.shape) for b in bodies], str(path))
 
 
 def export_stl(doc: Document, path: PathLike) -> None:
@@ -129,19 +136,21 @@ EXPORTERS = {"step": export_step, "stl": export_stl}
 
 
 def export(doc: Document, path: Path, fmt: str) -> dict:
-    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "body_ids", "skipped_hidden"}` を返す
-    (Session と MCP が共有する。パスの解決・親ディレクトリの検査は呼び出し側)。
+    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "body_ids", "skipped_hidden", "overwrote"}` を返す
+    (Session と MCP が共有する。パスの解決・親ディレクトリの検査は呼び出し側)。`overwrote` は書く前に同名のファイルがあったか。
 
     対象の ID を先に取る: 「書き出すものが無い」「全部非表示」の ValueError はファイルを作る前に出す。
     """
     write = EXPORTERS[fmt]
     body_ids = export_body_ids(doc)
     skipped = export_skipped_hidden(doc)
+    overwrote = Path(path).exists()
     write(doc, path)
     return {
         "path": str(path),
         "body_ids": list(body_ids),
         "skipped_hidden": list(skipped),
+        "overwrote": overwrote,
     }
 
 
@@ -162,11 +171,3 @@ def _bodies_to_export(doc: Document) -> list[Body]:
             "見えないものは書き出せない。set_visible(visible=true) で戻してから呼ぶこと"
         )
     return bodies
-
-
-def _shape_to_export(doc: Document):
-    bodies = _bodies_to_export(doc)
-    shapes = [b.shape for b in bodies]
-    if len(shapes) == 1:
-        return shapes[0]
-    return kernel.make_compound(shapes)

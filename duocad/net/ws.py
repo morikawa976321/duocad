@@ -13,6 +13,9 @@
 `client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
 `ack_id` も添え物で、付いていれば処理を終えた後(応答・配信を送り終えた後、失敗でも)に `done` を返す。
 画面はこれで「ビューポートの変化を待たせている」間を数える(`web/src/serverWait.svelte.ts`)。
+`expected_generation` も添え物で、付いていて文書の世代(`state.generation`)と違えば、実行せずに `error`(`refusal`)で断る。
+画面が切り替えの状態配信を受け取る前に送った要求を、切り替わった後の文書へ入れないため(本文の送信で時間の空くドロップの
+取り込みが付ける。`DocumentTools.call` の `expected_generation` と同じ照合)。
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
@@ -21,7 +24,7 @@
         {"type": "edge_chains", "body_id": str, "revision": int, "shape_revision": int, "chains": [[int, ...], ...]}
         {"type": "face_chains", "body_id": str, "revision": int, "shape_revision": int, "origins": [int, ...], "chains": [[int, ...], ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
-        {"type": "error", "message": str, "where": str, "client_op": int|None, "preview_id"?: int|None}  (`preview_id` は where が preview のときだけ)
+        {"type": "error", "message": str, "where": str, "kind": "history_edge"|"refusal"|"error", "client_op": int|None, "preview_id"?: int|None}  (`preview_id` は where が preview のときだけ)
         {"type": "done", "ack_id": int}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
@@ -76,7 +79,10 @@ import functools
 import json
 import re
 import threading
+import time
 from typing import Any, Optional  # Any: listeners / 接続
+
+from websockets.exceptions import ConnectionClosed
 
 from .. import catalog, local_settings, optimize_run
 from ..agent import AgentLoop, Cancellation, Limits, ProviderError
@@ -158,6 +164,15 @@ def _args_object(message: dict, *, required: bool) -> dict:
     if not isinstance(args, dict):
         raise ValueError(f"args はオブジェクトで渡す(受け取った型: {type(args).__name__})")
     return args
+
+
+def _error_kind(error: Exception) -> str:
+    """`error` の封筒の `kind`。画面が札の出し方を替える印で、`message`(`例外名: 本文`)の形は変えない。
+    `history_edge` は履歴の端での取り消し・やり直し、`refusal` は入力の誤り・断り(`ValueError` とその派生)、それ以外は `error`。
+    """
+    if getattr(error, "envelope_kind", None) == "history_edge":
+        return "history_edge"
+    return "refusal" if isinstance(error, ValueError) else "error"
 
 
 def _visible_flag(value: Any) -> bool:
@@ -274,6 +289,7 @@ class Server:
         # 接続ごとの送信ロック。無いと2つの `_push` が同じ接続への配信で競合し、(a)古い版のペイロードが後から届く、
         # (b)送っていない版を「知っている」ことにされ以後の差分が欠落する。
         self._send_locks: dict = {}  # connection -> asyncio.Lock
+        self._send_error_at: dict = {}  # connection -> 送れない値の知らせを最後に出した時刻(`_send_or_drop`)
         # -------------------------------------------------- G: アプリ内AIエージェント
         # 道具は起動時に一度だけ注入される(`bind_agent_tools`)。`mcp_server` が `server` をimportするので、このモジュールは
         # `mcp_server.DocumentTools` を作れない(循環)。`ToolSurface`(`descriptors`/`call`/`error_envelope`)を満たせば何でもよい。
@@ -400,6 +416,7 @@ class Server:
             self.clients.discard(connection)
             self._delivered.pop(connection, None)
             self._send_locks.pop(connection, None)
+            self._send_error_at.pop(connection, None)
             self._preview_seq.pop(connection, None)
             self._acks.pop(connection, None)
             pending = self._preview_futures.pop(connection, None)
@@ -469,6 +486,9 @@ class Server:
                 raise ValueError(f"unknown command: {command!r}")
             if command in self._hidden_commands:
                 raise ValueError(f"{command!r} はこの版では使えない(安定版では形状最適化を出さない。docs/STABLE.md)")
+            expected = message.get("expected_generation")
+            if expected is not None and expected != self.session.generation:
+                raise ValueError("操作を送ったあとに文書が切り替わったので実行しなかった")
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command in ("undo", "redo"):
@@ -763,6 +783,7 @@ class Server:
                     "type": "error",
                     "where": str(command),
                     "message": f"{type(error).__name__}: {error}",
+                    "kind": _error_kind(error),
                     # 画面は自分が待っている操作の失敗かをこれで見分ける(別の要求の失敗で確定の待ちを解かない)。
                     "client_op": message.get("client_op"),
                     # プレビューの断りは、どの要求のものかを画面が見分ける(古い断りを今の入力に付けない)。
@@ -838,6 +859,7 @@ class Server:
                             "type": "error",
                             "where": "preview",
                             "message": f"{type(error).__name__}: {error}",
+                            "kind": _error_kind(error),
                             "client_op": message.get("client_op"),
                             "preview_id": message.get("preview_id"),
                         })
@@ -1182,10 +1204,7 @@ class Server:
     async def _broadcast_optimize_status(self) -> None:
         """`optimize_status` を全接続へ配る。中身は接続ごとに送る直前に取り直す(`_broadcast` は接続を1つずつ await するので、作り置きの1通だと配る間に実行が終わったとき後ろの接続が「走っている」のまま固まる)。"""
         for target in list(self.clients):
-            try:
-                await _send(target, {"type": "optimize_status", **self._optimize_status()})
-            except Exception:
-                self.clients.discard(target)
+            await self._send_or_drop(target, {"type": "optimize_status", **self._optimize_status()})
 
     async def _optimize_start(self, connection: Any, message: dict) -> None:
         """最適化を1回走らせる。`run_optimization()` を待たずに返る(`_ai_start` と同じ形)。
@@ -1452,10 +1471,42 @@ class Server:
     async def _broadcast(self, payload: dict) -> None:
         """イベントを全接続へ配る(進捗・結果はどの画面から見ても同じ1つの出来事)。"""
         for target in list(self.clients):
-            try:
-                await _send(target, payload)
-            except Exception:
-                self.clients.discard(target)
+            await self._send_or_drop(target, payload)
+
+    #: 同じ接続へ「送れない値があった」を知らせる最短の間隔(秒)。配信のたびに失敗するとき、知らせが画面を埋めないように。
+    _SEND_ERROR_INTERVAL = 5.0
+
+    async def _send_or_drop(self, target: Any, payload: dict) -> bool:
+        """1接続へ送る。送れたら True。
+        切れた接続(`ConnectionClosed`・`OSError`)だけ配信先から外す。値が直列化できない等で送れなかったときは接続を残し、
+        理由を `error` でその接続へ返す(外すと、生きている画面が以後ずっと更新を受け取れず、応答も `done` も届かない)。
+        """
+        try:
+            await _send(target, payload)
+            return True
+        except (ConnectionClosed, OSError):
+            self._drop_client(target)
+        except Exception as error:  # noqa: BLE001  送り手の側の失敗(直列化できない値など)
+            now = time.monotonic()
+            if now - self._send_error_at.get(target, -self._SEND_ERROR_INTERVAL) >= self._SEND_ERROR_INTERVAL:
+                self._send_error_at[target] = now
+                try:
+                    await _send(target, {
+                        "type": "error",
+                        "where": "send",
+                        "message": f"画面へ送れない値があった({payload.get('type')}: {type(error).__name__}: {error})。再読み込みで直ることがある",
+                    })
+                except (ConnectionClosed, OSError):
+                    self._drop_client(target)
+                except Exception:  # noqa: BLE001  知らせも送れないなら黙る
+                    pass
+        return False
+
+    def _drop_client(self, target: Any) -> None:
+        self.clients.discard(target)
+        self._delivered.pop(target, None)
+        self._send_locks.pop(target, None)
+        self._send_error_at.pop(target, None)
 
     async def settled(self) -> None:
         """背景の測り直しと、それが終わって配る分が済むまで待つ(テストの接続が、配り終えた状態を見るため)。"""
@@ -1485,16 +1536,11 @@ class Server:
                 payload = {"type": "state", **delivered.compose(meta, delta["bodies"])}
                 if applied is not None and target is origin:
                     payload["applied"] = applied
-                try:
-                    await _send(target, payload)
-                    # **送信が成功してから**記録する(送信前に記録すると、失敗時や
-                    # 割り込み時に「送っていない版・面を知っている」ことになってしまう)。
+                # **送信が成功してから**記録する(送信前に記録すると、失敗時や
+                # 割り込み時に「送っていない版・面を知っている」ことになってしまう)。
+                if await self._send_or_drop(target, payload):
                     delivered.record(meta, delta["bodies"], deferred)
                     self._delivered[target] = delivered
-                except Exception:  # 落ちた接続のために他へ配れないことを避ける
-                    self.clients.discard(target)
-                    self._delivered.pop(target, None)
-                    self._send_locks.pop(target, None)
 
         # 警告は delta() が呼ぶ geometry() の中で積まれる(deliver() の内側)ので、全ターゲットの配信を終えてから取り出す(1回のpushで複数回積まれても束ねて1回出す)。
         await asyncio.gather(*(deliver(target) for target in targets))
@@ -1503,7 +1549,4 @@ class Server:
         for warning in self.session.take_warnings():
             payload = {"type": "warning", "message": warning}
             for target in [origin] if origin is not None else targets:
-                try:
-                    await _send(target, payload)
-                except Exception:
-                    self.clients.discard(target)
+                await self._send_or_drop(target, payload)

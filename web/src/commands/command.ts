@@ -255,7 +255,7 @@ export interface NumberArgSpec extends ArgSpecCommon {
    * 既定がほかの引数やサーバだけが知る事情で変わるとき(`thread` の隙間は山形と、面が軸か穴かで変わる)に使う。
    */
   optional?: true
-  /** 欄と見出しに重ねて出す補足(`title`)。見出しに書くと引数の行が折れて縦に伸びる。 */
+  /** 欄と見出しに重ねて出す補足(`title`)。長い説明はここへ(見出しは最小幅 5.5em で伸びるので、「距離(正=…)」程度の添え書きは見出しに書いてよい)。 */
   hint?: string
 }
 
@@ -278,7 +278,7 @@ export interface PointArgSpec extends ArgSpecCommon {
  */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
+  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string; title?: string }>
   /** 何も押していない間に選ばれている扱いにする `value`(上の docstring の条件を満たすものだけ)。 */
   default?: string
 }
@@ -481,6 +481,8 @@ type UiCommandId = 'select_in_sketch'
 
 interface CommandDefBase {
   label: string
+  /** ボタンにマウスを載せたときの1行の説明(30字程度まで)。キーがあるコマンドは末尾に「(Delete)」のように書く。 */
+  title: string
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
   /**
@@ -632,6 +634,28 @@ export function overflowNote(
   return ''
 }
 
+/**
+ * 個数の上限(`max`)がある選択引数に、クリックで `ref` を1つ足すと上限を超えるとき、置き換えで外す選択(最古から。`items` は追加順)。
+ * 超えないときや、どの引数も食わない参照は空。
+ */
+export function evictionsForClick(
+  command: CommandDef,
+  values: ArgValues,
+  ref: SelectionRef,
+  items: readonly SelectionRef[],
+  faceKindOf: FaceKindOf = () => null,
+): SelectionRef[] {
+  const kind = refKind(ref)
+  for (const spec of command.args) {
+    if (spec.kind !== 'selection' || spec.max === null || !argApplies(spec, values)) continue
+    if (!argKinds(spec).includes(kind) || !acceptsSurface(spec, ref, faceKindOf)) continue
+    const eaten = items.filter((item) => argKinds(spec).includes(refKind(item)) && acceptsSurface(spec, item, faceKindOf))
+    const over = eaten.length + 1 - spec.max
+    if (over > 0) return eaten.slice(0, over)
+  }
+  return []
+}
+
 /** その引数は、いま集まっている値の下で要るか(`when` が無ければ常に要る)。判定をここ1箇所に置く(各所が `spec.when?.(values)` を書くと、`when` を持たない種別を足したときに1つだけ `undefined` を偽と読む食い違いが入る)。 */
 export function argApplies(spec: ArgSpec, values: ArgValues): boolean {
   return spec.when === undefined || spec.when(values)
@@ -741,7 +765,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     return `${spec.label}を打つ(${spec.placeholder})`
   }
   if (spec.kind === 'plane') {
-    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ か、ソリッドの面)`
+    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ か、ソリッドの面。選んである面もクリックし直す)`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {

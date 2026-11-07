@@ -200,3 +200,26 @@ def test_out_of_range_edges_are_refused() -> None:
         finder.of([13])
     with pytest.raises(ValueError):
         finder.of([0])
+
+
+def test_outward_plane_normal_points_outward_on_a_mirrored_body() -> None:
+    """落ちたら、鏡映したボディの平面で法線が内向きになり、フィレットの到達幅が取り違えられる。"""
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+
+    from duocad import brep_geometry
+
+    box = BRepPrimAPI_MakeBox(gp_Pnt(1, 2, 3), 10, 20, 30).Shape()
+    mirrored = kernel.mirror_shape(box, [0, 0, 0], [1, 0, 0])
+    explorer = TopExp_Explorer(mirrored, TopAbs_FACE)
+    count = 0
+    while explorer.More():
+        face = explorer.Current()
+        normal = kernel_chains._outward_plane_normal(face)
+        centre = brep_geometry._face_props(face)[1]
+        # 箱の中心(-6, 12, 18)から面の重心へ向かうベクトルと同じ側を向く
+        toward_face = [centre[0] + 6.0, centre[1] - 12.0, centre[2] - 18.0]
+        assert sum(a * b for a, b in zip(normal, toward_face)) > 0
+        count += 1
+        explorer.Next()
+    assert count == 6

@@ -27,7 +27,7 @@ for (const file of readdirSync(directory).filter((name) => name.endsWith('.ts'))
           : [],
       )
       const picks = def.args.filter((arg) => arg.kind === 'pick').map((arg) => arg.name)
-      found.set(def.id, { id: def.id, file, needsEnter: needsEnter(def), unsent, picks, grain: grainOf(def) })
+      found.set(def.id, { id: def.id, file, title: def.title ?? null, needsEnter: needsEnter(def), unsent, picks, grain: grainOf(def) })
     }
   }
 }

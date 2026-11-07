@@ -131,17 +131,17 @@ def test_plane_plane_reports_distance_when_parallel_and_angle_otherwise():
 
 
 def test_the_parallel_tolerance_is_tighter_than_the_predicate_one():
-    """述語の `PARALLEL_TOLERANCE`(≈2.6度)で平行扱いされる傾きは、測定では角度になる。
+    """述語の `PARALLEL_TOLERANCE`(≈0.08度)で平行扱いされる傾きは、測定では角度になる。
 
-    落ちたら、2度傾いた面どうしに「距離」が出る(その距離は場所によって違う値なので嘘になる)。
+    落ちたら、0.05度傾いた面どうしに「距離」が出る(その距離は場所によって違う値なので嘘になる)。
     """
-    tilt = math.radians(2.0)
+    tilt = math.radians(0.05)
     a = Plane(point=(0.0, 0.0, 0.0), normal=(0.0, 0.0, 1.0))
     b = Plane(point=(0.0, 0.0, 10.0), normal=(math.sin(tilt), 0.0, math.cos(tilt)))
     result = between(a, b)
     assert result["parallel"] is False
-    assert result["angle_deg"] == pytest.approx(2.0)
-    assert PARALLEL_SIN_TOLERANCE < 1e-3
+    assert result["angle_deg"] == pytest.approx(0.05)
+    assert PARALLEL_SIN_TOLERANCE < math.sin(tilt)
 
 
 def test_two_vertices_of_the_box(session: Session):

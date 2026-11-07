@@ -5,6 +5,7 @@
    * 持つのは開閉と畳みの見た目だけ。畳んでも結果は残る(下の面を指すために退かす手。✕ は結果も捨てる)。
    */
   import type { Interference } from './interference.svelte'
+  import { MARK_HINTS } from './interferenceGroups'
   import { isImeKey } from './keys'
 
   let { interference }: { interference: Interference } = $props()
@@ -15,6 +16,7 @@
   function onKey(event: KeyboardEvent): void {
     if (event.key !== 'Enter' || isImeKey(event)) return
     event.preventDefault()
+    if (interference.running) return
     interference.run()
   }
 </script>
@@ -72,9 +74,9 @@
                   data-pair={row.key}
                   onclick={() => interference.select(row.key)}
                 >
-                  <span class="names">{row.title}</span>
+                  <span class="names" title={row.title}>{row.title}</span>
                   <span class="detail">{row.detail}</span>
-                  {#each row.marks as mark (mark)}<span class="mark">{mark}</span>{/each}
+                  {#each row.marks as mark (mark)}<span class="mark" title={MARK_HINTS[mark]}>{mark}</span>{/each}
                 </button>
                 {#if interference.selectedKey === row.key}
                   <div class="row-actions">
@@ -95,11 +97,11 @@
   /* `.stage` が位置の基準。ビューキューブの下に置く(右上)。ビューポートの寸法には触れない(styles.css の不変条件)。 */
   #interference-panel {
     position: absolute;
-    top: calc(150px + var(--toolbar-overlay-h, 0px));
+    top: calc(190px + var(--toolbar-overlay-h, 0px));
     right: 10px;
     z-index: 5;
     width: 300px;
-    max-height: calc(100% - 170px - var(--toolbar-overlay-h, 0px));
+    max-height: calc(100% - 210px - var(--toolbar-overlay-h, 0px));
     overflow: auto;
     font-variant-numeric: tabular-nums;
   }
@@ -134,6 +136,19 @@
   .close {
     margin-left: auto;
     padding: 0 6px;
+  }
+
+  /* 見た目の寸法は変えず、押せる範囲だけを上下左右に広げる。 */
+  .caret,
+  .close {
+    position: relative;
+  }
+
+  .caret::after,
+  .close::after {
+    content: '';
+    position: absolute;
+    inset: -5px -4px;
   }
 
   .row-actions {

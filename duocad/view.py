@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 from array import array
 from collections import OrderedDict
 from typing import Any, Callable, Optional
@@ -49,7 +50,7 @@ def _face_count(body) -> int:
 #: 387 B → 2.29 MB)は素通しにできない。履歴パネルが要るのは件数だけ。伏せるのは配信用の射影だけで、
 #: `document.log` と保存(`to_json`)は無傷。**`previous` が数値の操作(`set_parameter`)は素通りする**。
 _REDACTED_LOG_ARGS = (
-    "step", "entities", "faces", "previous", "previous_faces", "positions", "indices",
+    "step", "entities", "faces", "previous", "previous_faces", "positions", "indices", "brep",
 )
 
 
@@ -297,9 +298,11 @@ class DocumentView:
         #: STL書き出しは見ない(`io_step.STL_DEVIATION` 固定)。
         self.deviation = float(deviation)
         #: **ズーム連動の目標精度**(`set_view_resolution`)。`(線形偏差[mm], 角度偏差[rad])`。
-        #: `None` は未着で、`self.deviation` + `kernel.DEFAULT_ANGULAR_DEFLECTION` を使う。
+        #: `None` は未着で、文書の外接対角から決めた値を使う(`resolution.document_resolution`。空の文書は `self.deviation`)。
         #: 画面の設定であって文書の状態ではない(操作ログにもundoにも載らない)。
         self._view_resolution: Optional[tuple] = None
+        #: 未着の間の粗さの覚え `(表示中のボディの形の id の組, 粗さ)`。形が変わらない限り外接箱を測り直さない。
+        self._document_resolution_memo: Optional[tuple] = None
         #: **画面外・背を向けた面に使う粗さ**(`(線形偏差[mm], 角度偏差[rad])`)。
         #: `resolution.coarse_view_resolution` が決める、ズームに依存しない値。`None` は分けない。
         self._view_coarse_resolution: Optional[tuple] = None
@@ -326,6 +329,8 @@ class DocumentView:
         self._sketch_cache: dict = {}
         #: sketch_id -> `_SketchFills`。粗さが変わっても残す(`_sketch_cache` は `set_view_resolution` が捨てる)。
         self._sketch_fills: dict = {}
+        #: (sketch_id, 失敗の種類) -> 最後に知らせた文。同じ失敗を配信のたびに積み直さない(直れば消す)。
+        self._sketch_failures: dict = {}
         #: sketch_id -> (描くものの指紋, 版)。版は画面がスケッチを作り直すかの印(`_sketch_state` の `revision`)。
         #: 番号は文書をまたいで単調に増やす(`reset()` で数え直すと、別の文書の同じ id・同じ番号のスケッチを描き直さない)。
         self._sketch_revisions: dict = {}
@@ -351,15 +356,41 @@ class DocumentView:
     # ---------------------------------------------------------------- 可変解像度(ズーム連動)
     @property
     def view_deviation(self) -> float:
-        """いま測るのに使う線形偏差[mm]。ズーム連動値が来ていればそちら、無ければ土台。"""
-        return self.deviation if self._view_resolution is None else self._view_resolution[0]
+        """いま測るのに使う線形偏差[mm]。ズーム連動値が来ていればそちら、無ければ文書の外接対角から決めた値。"""
+        return self._effective_resolution()[0]
 
     @property
     def view_angular_deflection(self) -> float:
         """いま測るのに使う角度偏差[**ラジアン**]。度ではない(`duocad/resolution.py`)。"""
-        if self._view_resolution is None:
-            return kernel.DEFAULT_ANGULAR_DEFLECTION
-        return self._view_resolution[1]
+        return self._effective_resolution()[1]
+
+    def _effective_resolution(self) -> tuple:
+        """`_view_resolution` があればそれ、未着なら表示中のボディの外接対角から決めた値(形が変わるまで覚える)。"""
+        if self._view_resolution is not None:
+            return self._view_resolution
+        shapes = tuple(
+            id(body.shape) for body in self.document.bodies
+            if body.visible and body.mesh is None and body.shape is not None
+        )
+        memo = self._document_resolution_memo
+        if memo is not None and memo[0] == shapes:
+            return memo[1]
+        lows: list = []
+        highs: list = []
+        for body in self.document.bodies:
+            if body.visible and body.mesh is None and body.shape is not None:
+                box = kernel.bounding_box(body.shape, cache=self.document.bbox_cache)
+                lows.append(box["min"])
+                highs.append(box["max"])
+        if not lows:
+            return (self.deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)  # 空の文書は覚えない
+        diagonal = math.dist(
+            [min(low[axis] for low in lows) for axis in range(3)],
+            [max(high[axis] for high in highs) for axis in range(3)],
+        )
+        found = resolution.document_resolution(diagonal)
+        self._document_resolution_memo = (shapes, found)
+        return found
 
     def _body_focus(self, body_id: str) -> Optional[frozenset]:
         """そのBodyで**細かく測る面**の集合。`None` は全面(指定が無い/そのBodyの指定が無い)。
@@ -391,12 +422,12 @@ class DocumentView:
         """
         fine = self._body_focus(body_id)
         if fine is None:
-            return ("all", self._view_resolution, self._view_floored)
+            return ("all", self._effective_resolution(), self._view_floored)
         if not fine:
-            return ("coarse", self._view_coarse_resolution or self._view_resolution)
+            return ("coarse", self._view_coarse_resolution or self._effective_resolution())
         return (
             "mixed",
-            self._view_resolution,
+            self._effective_resolution(),
             self._view_coarse_resolution,
             tuple(sorted(fine)),
             self._view_floored,
@@ -530,10 +561,16 @@ class DocumentView:
         self._face_count_cache.clear()
         self._sketch_cache.clear()
         self._sketch_revisions.clear()
+        self._sketch_failures.clear()
         self._optimize_cache.clear()
         self._revision_state.clear()
         self._shape_state.clear()
         # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
+        # 目標の粗さも捨てる(前の文書に寄っていた細かさのまま、新しい文書の全面を最初の配信で測らない)。
+        # 画面は文書の切り替えで見え方を送り直す(`resolutionTracker.reapply`)。
+        self._view_resolution = None
+        self._view_coarse_resolution = None
+        self._view_floored = False
         self._view_focus = None
         self._focus_basis = {}
         self._focus_remapped.clear()
@@ -607,19 +644,26 @@ class DocumentView:
             self._sketch_revisions.pop(sketch_id, None)
         for sketch_id in [key for key in self._sketch_fills if key not in alive]:
             self._sketch_fills.pop(sketch_id, None)
+        for key in [key for key in self._sketch_failures if key[0] not in alive]:
+            self._sketch_failures.pop(key, None)
         return [self._sketch_state(item) for item in self.document.sketches]
 
     def _sketch_state(self, item) -> dict:
         try:
             drawn = region.expanded_entities(self.document, item.id)
+            self._sketch_failures.pop((item.id, "expand"), None)
         except Exception as error:  # 壊れたスケッチで画面全体を落とさない
-            self.warnings.append(f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}")
+            self._warn_sketch_once(
+                item.id, "expand", f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}"
+            )
             drawn = []
         # **貼った先のボディの形状は署名に入れない**。面に貼ったスケッチの姿勢は `item.plane["frame"]` が持つ
         # (`duocad.region.plane_frame`)ので、後からのフィレット等で枠も領域も変わらない。
         # `rebuild()` で姿勢が解き直されると `plane` が変わるので署名が拾う。
         content = json.dumps([item.plane, drawn], sort_keys=True, default=str)
-        signature = (content, self.view_deviation)
+        # 直線だけなら塗りが粗さに依らない(`_SketchFills.straight`)ので、ズームの段で署名も版も動かさない。
+        straight = all(entity["kind"] in _STRAIGHT_KINDS for entity in drawn)
+        signature = (content, None if straight else self.view_deviation)
         cached = self._sketch_cache.get(item.id)
         if cached is not None and cached[0] == signature:
             payload = dict(cached[1])
@@ -652,9 +696,10 @@ class DocumentView:
                 }
                 for entity in item.entities
             ]
+            self._sketch_failures.pop((item.id, "entities"), None)
         except Exception as error:
-            self.warnings.append(
-                f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
+            self._warn_sketch_once(
+                item.id, "entities", f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
             )
             payload["entities"] = []
         # 版: 画面が描くもの(枠・展開した図形・領域 = 署名、点と辺の取っ手 = `entities`)が変わったときだけ上がる。
@@ -667,6 +712,13 @@ class DocumentView:
             self._sketch_revisions[item.id] = known
         payload["revision"] = known[1]
         return payload
+
+    def _warn_sketch_once(self, sketch_id: str, kind: str, message: str) -> None:
+        """同じ失敗(同じ文)は、直るまで1回だけ警告に積む。"""
+        if self._sketch_failures.get((sketch_id, kind)) == message:
+            return
+        self._sketch_failures[(sketch_id, kind)] = message
+        self.warnings.append(message)
 
     def _sketch_drawing(self, item, drawn: list, content: str) -> "_SketchFills":
         """描くもの(`content`)が同じ間に使い回す枠と領域の検出。失敗は描くものが変わるまで1回だけ知らせる。"""
@@ -922,7 +974,7 @@ class DocumentView:
         store.unwarned_failed -= set(untriangulated)
         if newly_failed:
             self.warnings.append(
-                f"三角形分割が取れなかった面({body.name}): {newly_failed}(画面に出ません)"
+                f"表示できない面があります({body.name} の面 {newly_failed}): 表示用の三角形分割が取れず、画面に出ません(表示だけが欠けます)"
             )
         unresolved = ((result.get("boundary") or {}).get("unresolved") or []) + store.unwarned_boundary
         store.unwarned_boundary = []
@@ -930,7 +982,7 @@ class DocumentView:
             # 境界折れ線の交差を再分割で解消できなかった面は分割していない(kernel_meshing)。
             described = [f"{entry['face']}:{','.join(sorted({i['kind'] for i in entry['issues']}))}" for entry in unresolved]
             self.warnings.append(
-                f"境界の交差を解消できなかった面({body.name}): {described}(画面に出ません)"
+                f"表示できない面があります({body.name} の面 {described}): 境界線の交差を解消できず、画面に出ません(表示だけが欠けます)"
             )
         return result
 

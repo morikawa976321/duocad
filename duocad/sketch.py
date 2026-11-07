@@ -88,11 +88,41 @@ def _validate_rectangle(params: Dict[str, float]) -> None:
         )
 
 
+#: 円弧の掃引角の下限[度]。実測した限界ではなく置いた値(実測では 1e-8 度の掃引が全周の円になる)。
+#: 0→360 のようにちょうど 360 の倍数の掃引は誤差ではなく全周の指定として通す。
+ARC_MIN_SWEEP_DEG = 1e-6
+
+
+def arc_sweep_is_degenerate(start_deg: float, end_deg: float) -> bool:
+    """掃引が 0 ではないのに `ARC_MIN_SWEEP_DEG` 未満(カーネルが全周の円にしてしまう)。360 の倍数ちょうどは含めない。
+
+    引き算の丸め誤差(360 の倍数のつもりが 1e-13 度ほど残る)は全周の指定として通すため、`ulp` 数個ぶんより下も含めない。
+    これを通すのは角度の差が 0 でない 360 の倍数のそばのときだけで、差そのものが誤差ほど(0 → 1e-14)なら断る。
+    """
+    difference = end_deg - start_deg
+    sweep = difference % 360.0
+    if not 0.0 < sweep < ARC_MIN_SWEEP_DEG:
+        return False
+    noise = 4.0 * math.ulp(max(360.0, abs(start_deg), abs(end_deg)))
+    return abs(difference) < 180.0 or sweep > noise
+
+
 def _validate_arc(params: Dict[str, float]) -> None:
     if not params["radius"] > 0:
         raise ValueError(f"arc radius must be positive, got {params['radius']!r}")
     if params["start_deg"] == params["end_deg"]:
         raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
+
+
+def require_new_arc_sweep(start_deg: float, end_deg: float) -> None:
+    """誤差ほどの掃引を断る。**新しい操作の入口(円弧を足す・角度を書き換える)だけが呼ぶ**。
+    `_validate_arc` に入れると、この断りより前に作った文書の再生・取り消し・やり直しが失敗する。
+    """
+    if arc_sweep_is_degenerate(start_deg, end_deg):
+        raise ValueError(
+            f"arc sweep must be at least {ARC_MIN_SWEEP_DEG:g} degrees "
+            f"(掃引が誤差ほどの円弧は全周の円になる。start_deg={start_deg!r}, end_deg={end_deg!r})"
+        )
 
 
 def _validate_bezier(params: Dict[str, float]) -> None:
@@ -931,45 +961,63 @@ def _enter_sketch_create(document: Document, base_plane: Optional[str] = None) -
     return _created(document, sketch_create(document, plane_from_selection(document, base_plane)))
 
 
+#: オフセット平面の距離の絶対値の上限[mm]。実測した限界ではなく置いた値(実測では 1e6 は通り、1e12 で図形の追加が失敗し、
+#: 1e100 は通る: 境目が一定でない)。1 km は実用の寸法をはるかに超える。
+MAX_OFFSET_DISTANCE = 1e6
+
+
 @entry(VERB_SKETCH_CREATE_OFFSET)
 def _enter_sketch_create_offset(
     document: Document, distance: float, base_plane: Optional[str] = None
 ) -> dict:
-    plane = offset_plane(plane_from_selection(document, base_plane), distance)
+    if abs(distance) > MAX_OFFSET_DISTANCE:
+        raise ValueError(
+            f"sketch_create_offset: 距離の絶対値は {MAX_OFFSET_DISTANCE:g} mm 以下(distance={distance!r})"
+        )
+    plane =offset_plane(plane_from_selection(document, base_plane), distance)
     return _created(document, sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET))
+
+
+def _drawable(document: Document, sketch_id: str) -> str:
+    """図形を足す新しい操作の入口が通す門(隠したスケッチへは足せない。`verbs._common.editable_sketch`。redo / 再生は通らない)。"""
+    from .verbs._common import editable_sketch
+
+    editable_sketch(document, sketch_id)
+    return sketch_id
 
 
 @entry(VERB_ADD_POINT)
 def _enter_add_point(document: Document, sketch_id: str, point: Any) -> dict:
-    return {"entity_id": add_point(document, sketch_id, point)}
+    return {"entity_id": add_point(document, _drawable(document, sketch_id), point)}
 
 
 @entry(VERB_ADD_LINE)
 def _enter_add_line(document: Document, sketch_id: str, p0: Any, p1: Any) -> dict:
-    return {"entity_id": add_line(document, sketch_id, p0, p1)}
+    return {"entity_id": add_line(document, _drawable(document, sketch_id), p0, p1)}
 
 
 @entry(VERB_ADD_CIRCLE)
 def _enter_add_circle(document: Document, sketch_id: str, center: Any, diameter: float) -> dict:
-    return {"entity_id": add_circle(document, sketch_id, center, diameter)}
+    return {"entity_id": add_circle(document, _drawable(document, sketch_id), center, diameter)}
 
 
 @entry(VERB_ADD_ELLIPSE)
 def _enter_add_ellipse(
     document: Document, sketch_id: str, center: Any, width: float, height: float, angle: float = 0.0
 ) -> dict:
-    return {"entity_id": add_ellipse(document, sketch_id, center, width, height, angle)}
+    return {"entity_id": add_ellipse(document, _drawable(document, sketch_id), center, width, height, angle)}
 
 
 @entry(VERB_ADD_RECTANGLE)
 def _enter_add_rectangle(
     document: Document, sketch_id: str, corner: Any, width: float, height: float, angle: float = 0.0
 ) -> dict:
-    return {"entity_id": add_rectangle(document, sketch_id, corner, width, height, angle)}
+    return {"entity_id": add_rectangle(document, _drawable(document, sketch_id), corner, width, height, angle)}
 
 
 @entry(VERB_ADD_ARC)
 def _enter_add_arc(
     document: Document, sketch_id: str, center: Any, radius: float, start_deg: float, end_deg: float
 ) -> dict:
-    return {"entity_id": add_arc(document, sketch_id, center, radius, start_deg, end_deg)}
+    require_new_arc_sweep(float(start_deg), float(end_deg))
+    return {"entity_id": add_arc(document, _drawable(document, sketch_id), center, radius, start_deg, end_deg)}

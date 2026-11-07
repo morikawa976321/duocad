@@ -5,7 +5,7 @@
    * 置き場はブラウザの列の右: ブラウザ(z-index 5)は下端まで伸びるので、同じ列の下に置くと隠れる。
    * 札の高さを `--browser-bottom-reserve` に渡す手は、選ぶたびにブラウザの高さが変わるので取らない。
    */
-  import { selectionInfoRows, selectionInfoTitle, type InfoNames } from './selectionInfoText'
+  import { selectionInfoErrorText, selectionInfoRows, selectionInfoTitle, type InfoNames } from './selectionInfoText'
   import type { MeasureItem } from './session'
 
   let {
@@ -30,7 +30,7 @@
         {/each}
       </dl>
     {:else}
-      <div class="error">選択の情報を取れなかった: {error}</div>
+      <div class="error">選択の情報を取れなかった: {selectionInfoErrorText(error ?? '')}</div>
     {/if}
   </div>
 {/if}

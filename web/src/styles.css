@@ -44,7 +44,7 @@
   --line-soft: oklch(26% 0.007 250);
   --text: oklch(89% 0.008 95);
   --dim: oklch(62% 0.012 95);
-  --dim-2: oklch(46% 0.01 95);
+  --dim-2: oklch(57% 0.01 95);
   /* 通らない理由・失敗(入力欄の赤・結果が信用できない通知・AI のエラー行)。琥珀(--accent)は
      「人の手が要る」であって失敗ではないので、別の色を1つだけ持つ。 */
   --bad: oklch(72% 0.14 30);
@@ -139,7 +139,8 @@ header {
 /* ツールバー行の見出し列。**header 横並びの `.label`(5.5em)と同じ** ——
    モード行・コマンド行・overlay 行で縦に揃える。 */
 .toolbar .label {
-  width: 5.5em;
+  width: auto;
+  min-width: 5.5em;
   flex: 0 0 auto;
   color: var(--dim);
 }
@@ -178,7 +179,8 @@ header {
   min-width: 0;
 }
 
-.toolbar .command-body > #command-prompt {
+.toolbar .command-body > #command-prompt,
+.toolbar .command-body > .prompt-space {
   flex: 0 0 auto;
   margin-left: auto;
   min-width: 0;
@@ -186,6 +188,10 @@ header {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.toolbar .command-body > .prompt-space {
+  visibility: hidden;
 }
 
 /* 起動中の待ちの1行。overlay の中なので折り返して伸びてもビューポートの実寸は動かない(`.toolbar-overlay`)。 */
@@ -206,12 +212,11 @@ header {
 }
 
 /* verb の引数行。`.toolbar` と同じ全幅・padding・背景 —— in-flow 高さは増やさない。
-   上端 padding は `.toolbar` の下端 padding(8px)と揃える —— コマンド行と直接くっつくと
-   ボタン・入力欄の余白が視覚的に消える(`.toolbar` 側は overlay を開いている間
-   `padding-bottom:0` になるので、ここが唯一の隙間の出どころ)。 */
+   `--toolbar-overlay-h` は overlay が `.main`(ビューポート側)へ重なる分(`CommandHost.svelte` の `syncOverlayHeight`)。 */
 .toolbar-overlay {
   position: absolute;
-  top: 100%;
+  /* `.toolbar` の下端 padding(8px)の分だけ食い込ませる: 開閉で in-flow の高さを動かさず、下端の横線(border)は overlay の背景が隠す。 */
+  top: calc(100% - 8px);
   left: 0;
   right: 0;
   display: flex;
@@ -221,13 +226,6 @@ header {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   box-sizing: border-box;
-}
-
-/* overlay 中は in-flow 下端の padding/border を外す —— コマンド行と overlay の間に
-   隙間と横線(`.toolbar` の border-bottom)が出るのを防ぐ。区切りは overlay 下端だけ。 */
-.app.toolbar-overlay-open .toolbar {
-  border-bottom: none;
-  padding-bottom: 0;
 }
 
 /* overlay 分だけ左右サイドバーを下げる。`.stage` / `.viewport` の寸法は触らない。 */
@@ -265,6 +263,18 @@ button.tag.on {
    header は flex なので、高さにもビューポートの寸法にも影響しない。 */
 header .tag.end {
   margin-left: auto;
+}
+
+/* 安定版の「更新」ボタン(ChannelBadge)。作業中に現れても既存のボタンを動かさないよう、右端の AI ボタンの手前の空きへ置く
+   (余白の押し出しは更新ボタンが引き継ぎ、AI ボタンは隣に付くだけ)。 */
+header #update-button {
+  order: 1;
+  margin-left: auto;
+}
+
+header:has(#update-button) .tag.end {
+  order: 2;
+  margin-left: 0;
 }
 
 .main {

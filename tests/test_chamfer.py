@@ -11,7 +11,7 @@ from duocad.document import Document
 from duocad.region import region_ref
 from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude
-from document_support import edges_of_kind, kinds_of, new_box
+from document_support import edges_of_kind, kinds_of, new_box, replay_through_json
 
 #: 円筒の円い縁を1つ面取りしたときの実測
 CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
@@ -84,3 +84,34 @@ def test_chamfer_records_provenance_through_the_normalizing_adapter():
     # 面取りだけ由来の写像が空でも緑にならない(フィレットは `test_fillet_shifts_face_indices` が中身まで見ている)
     assert operation.provenance["face_map"]
     doc.log.to_json()  # JSON化できない値が混ざっていればここで落ちる
+
+
+def test_a_too_large_chamfer_is_refused_without_changing_the_document():
+    """落ちたら、大きすぎる距離が成功して形かログが変わる(断った後に文書が半端に残る)。"""
+    doc = Document()
+    body_id = new_box(doc)
+    straight = edges_of_kind(doc, body_id, "line")
+    kinds_before = kinds_of(doc, body_id)
+    volume_before = query.volume(doc.get_body(body_id).shape)
+    log_before = len(doc.log.entries)
+
+    with pytest.raises(ValueError, match="IsDone is false.*隣の形に届く距離"):
+        chamfer(doc, straight[:1], 25.0, body_id=body_id)
+
+    assert len(doc.log.entries) == log_before
+    assert kinds_of(doc, body_id) == kinds_before
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(volume_before)
+
+
+def test_a_chamfer_replays_to_the_same_shape():
+    """落ちたら、保存した文書を開き直したときの面取りの形が最初と違う。"""
+    doc = Document()
+    body_id = new_box(doc)
+    chamfer(doc, edges_of_kind(doc, body_id, "line")[:1], 2.0, body_id=body_id)
+
+    restored = replay_through_json(doc)
+
+    assert kinds_of(restored, body_id) == kinds_of(doc, body_id)
+    assert query.volume(restored.get_body(body_id).shape) == pytest.approx(
+        query.volume(doc.get_body(body_id).shape)
+    )

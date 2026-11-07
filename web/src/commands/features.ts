@@ -18,6 +18,7 @@ import {
 } from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import type { SelectionRef } from '../session'
+import { evaluateExpression } from '../expression'
 
 /** 1以上の整数だけを通す(個数。コアの `parameters.is_positive_int` と同じ判定)。 */
 function count(label: string, least: number): (value: number) => string | null {
@@ -50,7 +51,7 @@ const BODY_SELECTION: Pick<SelectionArgSpec, 'shapeKind' | 'kinds'> = {
 /**
  * 押し出し(verb `extrude`)。スケッチ編集中は閉領域、通常モードはソリッドの面か領域を選ぶ2つの定義を作る
  * (サーバは選択の種別で分岐し、混在は断る。通常モードの領域は 2026-10-18 本人決定。docs/DESIGN_DECISIONS.md)。
- * 種別(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
+ * 結果(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
  * 面の距離は外向きが正(削るには負)。領域の距離は0だけが無効。
  * テーパー角は正で太る・負で細る(Fusion と同じ符号)。0 のときは送らない(テーパーの無い押し出しと同じ args になる)。
  */
@@ -62,6 +63,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
     id: 'extrude',
     label: '押し出す',
     buttonId: 'extrude',
+    title: '選んだ領域・面を距離だけ押し出す',
     preview: 'server',
     args: [
       isFace
@@ -70,24 +72,26 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       {
         kind: 'number',
         name: 'distance',
-        label: isFace ? '距離(面は正=外向き)' : '距離',
+        label: isFace ? '距離' : '距離(正=スケッチの表側)',
         unit: 'mm',
         inputId: 'distance',
+        hint: isFace ? '面は正=外向き / 負=削る' : undefined,
         reject: (value) => (value === 0 ? (isFace ? '距離が0(面は正=外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
       },
       {
         kind: 'number',
         name: 'taper',
-        label: 'テーパー角(正=太る / 負=細る)',
+        label: 'テーパー角',
         unit: '°',
         inputId: 'extrude-taper',
+        hint: '正=太る / 負=細る',
         default: 0,
         reject: (value) => (Math.abs(value) <= 89 ? null : 'テーパー角は-89以上89以下'),
       },
       {
         kind: 'choice',
         name: 'mode',
-        label: '種別',
+        label: '結果',
         options: [
           { value: 'join', label: '結合', buttonId: 'extrude-mode-join' },
           { value: 'cut', label: '切り取り', buttonId: 'extrude-mode-cut' },
@@ -110,7 +114,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       }
       if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
       if (typeof taper !== 'number') return { ok: false, reason: 'テーパー角が数値でない' }
-      if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+      if (typeof mode !== 'string') return { ok: false, reason: '結果が選ばれていない' }
       return { ok: true, args: taper === 0 ? { distance, mode } : { distance, taper, mode } }
     },
   }
@@ -131,6 +135,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
   id: 'revolve',
   label: '回転体',
   buttonId: 'revolve',
+  title: '領域を軸のまわりに回して立体にする',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'regions', label: '回す領域', shapeKind: 'region', min: 1, max: null },
@@ -166,7 +171,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
     {
       kind: 'choice',
       name: 'mode',
-      label: '種別',
+      label: '結果',
       options: [
         { value: 'join', label: '結合', buttonId: 'revolve-mode-join' },
         { value: 'cut', label: '切り取り', buttonId: 'revolve-mode-cut' },
@@ -182,7 +187,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
     const angle = values.angle
     const mode = values.mode
     if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '結果が選ばれていない' }
     if (axisKind === 'line') {
       // 参照のまま送る(鏡映の軸と同じ)。線分であることの検査はコアに任せる。
       const line = pickedRefOf(values.axis_line)
@@ -195,8 +200,24 @@ export const REVOLVE: CommandDef<'revolve'> = {
 
 /** 始点のずらし(`shifts`)の欄の文字列を整数の並びへ。空白かカンマ区切り。読めなければ null。 */
 export function parseShifts(text: string): number[] | null {
-  const parts = text.split(/[\s,]+/).filter((part) => part !== '')
-  const values = parts.map(Number)
+  const parts: string[] = []
+  let depth = 0
+  let part = ''
+  for (const char of text) {
+    if (char === '(' || char === '（') depth += 1
+    else if (char === ')' || char === '）') depth -= 1
+    if (depth < 0) return null
+    if (depth === 0 && /[\s,，、]/.test(char)) {
+      if (part !== '') parts.push(part)
+      part = ''
+    } else part += char
+  }
+  if (depth !== 0) return null
+  if (part !== '') parts.push(part)
+  const values = parts.map((part) => {
+    const result = evaluateExpression(part)
+    return result.ok ? result.value : NaN
+  })
   return values.every(Number.isInteger) ? values : null
 }
 
@@ -212,13 +233,14 @@ export const LOFT: CommandDef<'loft'> = {
   id: 'loft',
   label: 'ロフト',
   buttonId: 'loft',
+  title: '複数の断面をつないで立体にする',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 1, max: null },
     {
       kind: 'choice',
       name: 'mode',
-      label: '種別',
+      label: '結果',
       options: [
         { value: 'join', label: '結合', buttonId: 'loft-mode-join' },
         { value: 'cut', label: '切り取り', buttonId: 'loft-mode-cut' },
@@ -251,7 +273,7 @@ export const LOFT: CommandDef<'loft'> = {
       return { ok: false, reason: '断面をもう1つ選ぶか、収束点を指す(断面1つなら点が要る)' }
     }
     const mode = values.mode
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '結果が選ばれていない' }
     // 指していない点は引数ごと送らない(省略は「収束させない」)。
     const points = { ...(start === null ? {} : { start_point: start }), ...(end === null ? {} : { end_point: end }) }
     const text = typeof values.shifts === 'string' ? values.shifts.trim() : ''
@@ -274,6 +296,7 @@ export const FILLET: CommandDef<'fillet'> = {
   id: 'fillet',
   label: 'フィレット',
   buttonId: 'fillet',
+  title: '選んだ辺を丸める',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'edges', label: 'フィレットする辺', shapeKind: 'edge', min: 1, max: null },
@@ -300,6 +323,7 @@ export const CHAMFER: CommandDef<'chamfer'> = {
   id: 'chamfer',
   label: '面取り',
   buttonId: 'chamfer',
+  title: '選んだ辺を斜めに落とす',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'edges', label: '面取りする辺', shapeKind: 'edge', min: 1, max: null },
@@ -326,6 +350,7 @@ export const SHELL_BODY: CommandDef<'shell_body'> = {
   id: 'shell_body',
   label: 'シェル',
   buttonId: 'shell-body',
+  title: '選んだ面を抜いて中を空洞にする',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'faces', label: '抜く面', shapeKind: 'face', min: 1, max: null },
@@ -355,13 +380,14 @@ export const OFFSET_FACES: CommandDef<'offset_faces'> = {
   id: 'offset_faces',
   label: 'オフセット',
   buttonId: 'offset-faces',
+  title: '選んだ面を距離だけ動かす',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'faces', label: '動かす面', shapeKind: 'face', min: 1, max: null },
     {
       kind: 'number',
       name: 'distance',
-      label: '距離',
+      label: '距離(正=肉が増える/穴は細くなる)',
       unit: 'mm',
       inputId: 'offset-faces-distance',
       reject: (value) => (value === 0 ? '距離が0では面が動かない' : null),
@@ -385,8 +411,9 @@ export const DELETE_FACES: CommandDef<'delete_faces'> = {
   id: 'delete_faces',
   label: '面の削除',
   buttonId: 'delete-faces',
+  title: '選んだ面を削除して周りの面で閉じる',
   preview: 'server',
-  args: [{ kind: 'selection', name: 'faces', label: '消す面', shapeKind: 'face', min: 1, max: null }],
+  args: [{ kind: 'selection', name: 'faces', label: '削除する面', shapeKind: 'face', min: 1, max: null }],
   build(values) {
     const empty = missingSelection(values, 'faces', '面')
     if (empty !== null) return { ok: false, reason: empty }
@@ -402,6 +429,7 @@ export const THREAD: CommandDef<'thread'> = {
   id: 'thread',
   label: 'ねじ',
   buttonId: 'thread',
+  title: '円筒面にねじ山を刻む',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'faces', label: '全周の円筒面', shapeKind: 'face', surfaceKinds: ['cylinder_full'], min: 1, max: 1 },
@@ -410,8 +438,8 @@ export const THREAD: CommandDef<'thread'> = {
       name: 'profile',
       label: '山形',
       options: [
-        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.20)', buttonId: 'thread-profile-trapezoid30' },
-        { value: 'trapezoid45', label: '45°台形(穴の推奨 0.11〜0.13)', buttonId: 'thread-profile-trapezoid45' },
+        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.20 mm)', buttonId: 'thread-profile-trapezoid30' },
+        { value: 'trapezoid45', label: '45°台形(穴の推奨 0.11〜0.13 mm)', buttonId: 'thread-profile-trapezoid45' },
       ],
     },
     {
@@ -445,6 +473,7 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
   id: 'boolean_body',
   label: 'ブーリアン',
   buttonId: 'boolean-body',
+  title: 'ボディどうしを結合・切り取り・交差する',
   preview: 'server',
   args: [
     {
@@ -466,12 +495,22 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
     {
       kind: 'choice',
       name: 'mode',
-      label: '種別',
+      label: '演算',
       options: [
         { value: 'union', label: '結合', buttonId: 'boolean-body-union' },
         { value: 'cut', label: '切り取り', buttonId: 'boolean-body-cut' },
         { value: 'intersect', label: '交差', buttonId: 'boolean-body-intersect' },
       ],
+    },
+    {
+      kind: 'choice',
+      name: 'keep_tool',
+      label: 'ツール',
+      options: [
+        { value: 'remove', label: '削除', buttonId: 'boolean-body-tool-remove', sends: false },
+        { value: 'keep', label: '残す', buttonId: 'boolean-body-tool-keep', sends: true },
+      ],
+      default: 'remove',
     },
   ],
   build(values) {
@@ -480,8 +519,9 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
     const empty = missingSelection(values, 'tools', 'ツールボディ')
     const mode = values.mode
     if (empty !== null) return { ok: false, reason: empty }
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
-    return { ok: true, args: { target_ref: target, mode } }
+    if (typeof mode !== 'string') return { ok: false, reason: '演算が選ばれていない' }
+    // 消す(既定)は送らない: 引数の無い今までの呼び出しと同じ形にする。
+    return { ok: true, args: values.keep_tool === 'keep' ? { target_ref: target, mode, keep_tool: true } : { target_ref: target, mode } }
   },
 }
 
@@ -490,6 +530,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
   id: 'pattern_rectangular',
   label: '矩形反復',
   buttonId: 'pattern-rectangular',
+  title: '図形を縦横に並べて複製する',
   // 変わるのはスケッチの図形でソリッドではないので、サーバの投機実行は形が変わったBodyを返さない(`duocad/catalog.py` の note)。複製の座標は `entityKinds.ts` の表が出す。
   preview: 'local',
   args: [
@@ -549,6 +590,9 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
     if (dx === 0 && dy === 0 && nx * ny > 1) {
       return { ok: false, reason: '間隔が両方0(複製が元と重なる)' }
     }
+    // 片方向だけ間隔0で個数が2以上だと、その方向の1つ目の複製が元と重なる(コアが断る)。
+    if (dx === 0 && nx > 1) return { ok: false, reason: 'X間隔が0でX個数が2以上(複製が元と重なる。X間隔を0以外にするかX個数を1にする)' }
+    if (dy === 0 && ny > 1) return { ok: false, reason: 'Y間隔が0でY個数が2以上(複製が元と重なる。Y間隔を0以外にするかY個数を1にする)' }
     if (nx === 1 && ny === 1) return { ok: false, reason: 'X個数かY個数を2以上にする(1×1は反復にならない)' }
     return { ok: true, args: { entities, dx, dy, nx, ny } }
   },
@@ -563,6 +607,7 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
   id: 'pattern_circular',
   label: '円形反復',
   buttonId: 'pattern-circular',
+  title: '図形を中心のまわりに並べて複製する',
   // 回転中心を置くクリックの前から幽霊が出る(`CommandHost` が待っている点をポインタ位置で仮に埋める)。
   preview: 'local',
   args: [
@@ -603,7 +648,7 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
 
 /**
  * ボディの平行移動 / 回転 / 複製。対象はボディ単位で選ぶ(`BODY_SELECTION`)。
- * 複製するかは「動かす」、種別は「並進」が既定(選び違えても undo 1回で戻り、形は壊れない。`ChoiceArgSpec.default`)。
+ * 元のボディは「移す」、動かし方は「並進」が既定(選び違えても undo 1回で戻り、形は壊れない。`ChoiceArgSpec.default`)。
  *
  * 回転軸は共有選択集合に入れず別チャンネル(`kind: 'pick'`)で指す: 入れると `require_bodies` が軸にした辺のボディまで動かす対象に数える。
  * 軸はまっすぐな辺か原点の軸をクリックで指す。画面だけの選択肢(X/Y/Z のボタン)は置かない: 共有引数に無い状態を画面が持つと、
@@ -614,6 +659,7 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
   id: 'move_body',
   label: '動かす',
   buttonId: 'move-body',
+  title: 'ボディを並進・回転で動かす',
   // 形は変わらず位置だけが変わるので、届いているメッシュを dx/dy/dz だけずらして半透明で重ねる。元の実体は隠さない(移動前後を並べて見せる)。
   preview: 'local',
   args: [
@@ -625,8 +671,8 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       min: 1,
       max: null,
     },
-    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('move-body'), default: 'move' },
-    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('move-body'), default: 'translate' },
+    { kind: 'choice', name: 'copy', label: '元のボディ', options: copyOptions('move-body'), default: 'move' },
+    { kind: 'choice', name: 'mode', label: '動かし方', options: modeOptions('move-body'), default: 'translate' },
     { kind: 'number', ...offsetArg('dx', 'move-body', finite('X')) },
     { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
     { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },
@@ -681,6 +727,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
   id: 'mirror_body',
   label: '鏡映複製',
   buttonId: 'mirror-body',
+  title: 'ボディを面に対して鏡映して複製する',
   preview: 'server',
   args: [
     {
@@ -737,6 +784,7 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
   id: 'split_body',
   label: 'ボディ分割',
   buttonId: 'split-body',
+  title: 'ボディを平面で切って分ける',
   preview: 'server',
   args: [
     {
@@ -783,7 +831,12 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
       label: '残す側',
       options: [
         { value: 'both', label: '両側', buttonId: 'split-body-keep-both' },
-        { value: 'positive', label: '法線の側', buttonId: 'split-body-keep-positive' },
+        {
+          value: 'positive',
+          label: '法線の側',
+          title: '法線 = 切る平面に垂直な向き。その向きの側を残す',
+          buttonId: 'split-body-keep-positive',
+        },
         { value: 'negative', label: '反対側', buttonId: 'split-body-keep-negative' },
       ],
     },
@@ -823,6 +876,7 @@ export const DELETE_SELECTION: CommandDef<'delete'> = {
   id: 'delete',
   label: '削除する',
   buttonId: 'delete',
+  title: '選んだものを削除する(Delete)',
   preview: 'none',
   args: [
     {

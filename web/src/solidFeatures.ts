@@ -49,6 +49,8 @@ export interface SolidFeaturesDeps {
   sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean
   /** 描くものが変わった(描き直しを頼む)。 */
   invalidate(): void
+  /** プレビューが消す相手のボディか(当たり・矩形選択から外す。フィレットなど元のボディを残すプレビューは含まない)。 */
+  hiddenByPreview(bodyId: string): boolean
 }
 
 export interface SolidFeatures {
@@ -174,7 +176,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     const limit = radiusPx * radiusPx
     const found: EdgeCandidate[] = []
     for (const [bodyId, entry] of edgeData) {
-      if (!sphereNear(entry.sphere, x, y, radiusPx, projector)) continue
+      if (deps.hiddenByPreview(bodyId) || !sphereNear(entry.sphere, x, y, radiusPx, projector)) continue
       for (const edge of entry.edges) {
         if (!sphereNear(edge.sphere, x, y, radiusPx, projector)) continue
         const hit = closestOnPolyline(x, y, float32Polyline(edge.points), projector, clip)
@@ -195,7 +197,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     const limit = radiusPx * radiusPx
     const found: VertexCandidate[] = []
     for (const [bodyId, entry] of vertexData) {
-      if (!sphereNear(entry.sphere, x, y, radiusPx, projector)) continue
+      if (deps.hiddenByPreview(bodyId) || !sphereNear(entry.sphere, x, y, radiusPx, projector)) continue
       for (const vertex of entry.vertices) {
         if (keep !== null && !keep(vertex.point)) continue
         const hit = screenHitOfPoint(x, y, vertex.point, projector)
@@ -348,7 +350,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     if ((known?.source ?? null) === data) return false
     if (data === null) edgeData.delete(bodyId)
     else {
-      const edges = data.edges.map((edge) => {
+      const edges = data.edges.filter((edge) => !edge.degenerate).map((edge) => {
         const points = edge.points instanceof Float32Array ? edge.points : new Float32Array(edge.points)
         return { index: edge.index, kind: edge.kind, points, sphere: sphereOf(points) }
       })
@@ -436,11 +438,13 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     },
     forEachEdge(visit) {
       for (const [bodyId, entry] of edgeData) {
+        if (deps.hiddenByPreview(bodyId)) continue
         for (const edge of entry.edges) visit({ bodyId, edgeIndex: edge.index }, edge.points, entry.source.deviation, edge.kind)
       }
     },
     forEachVertex(visit) {
       for (const [bodyId, entry] of vertexData) {
+        if (deps.hiddenByPreview(bodyId)) continue
         for (const vertex of entry.vertices) visit({ bodyId, vertexIndex: vertex.index }, vertex.point)
       }
     },

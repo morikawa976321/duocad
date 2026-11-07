@@ -8,7 +8,7 @@
 - `binary_search.SearchConditions(..., keep_cells=<bool配列。設計空間と同形>)`（`None` は対象外なし）。形が違えば `ValueError`。製品では `optimize_run._build_search_conditions` が `space.keep` を渡す。
 - `binary_search.keep_cells_without_room(design_space, keep, min_width_cells, obstacle=None) -> {cells, around_exclude, around_outside}`: 設計空間の m 立方 opening に入らない保持セル（どんな形を選んでも m 立方で覆えず、最小幅の保証が効かない場所）の数と、その周りの空きセルの内訳。**周りは26近傍で数える**（hanger で 146。6近傍だと 68）。格子の外は `around_outside`。
 - `DesignSpace.obstacle`: 除外ソリッドの格子上の占有（読み取り専用。除外が無ければ全 False）。
-- `optimize_run.run()` の戻り値 `min_width_keep_without_room`（常にある。m=1 なら全て0）。0 でなければ `warning` に「除外ソリッドに挟まれて／設計空間の端にあって」。trace のスナップショット名は `min-width-keep-without-room`（m>1 のときだけ）。**保証が効かない保持セルは黙って例外にせず、数と内訳を返して警告する。** 警告文の全文一致はテストで固定していない（語句だけ）。
+- `optimize_run.run()` の戻り値 `min_width_keep_without_room`（常にある。m=1 なら全て0）。0 でなければ `warning` に「除外ソリッドに挟まれて／設計空間の端にあって」。trace のスナップショット名は `min-width-keep-without-room`（`optimize_pipeline.prepare_search` が毎回記録する。m=1 なら全て0）。**保証が効かない保持セルは黙って例外にせず、数と内訳を返して警告する。** 警告文の全文一致はテストで固定していない（語句だけ）。
 
 ## 最小幅の対象外（exempt）
 
@@ -24,7 +24,7 @@
 - `binary_search.resolve_islands(candidate, conditions)`: 生存成分は「全条件を満たし、かつ全保持セルを含む成分」だけ。保持セルが2つ以上の成分に分かれる形は生存成分が無い（段階3では `full_material_infeasible`）。
 - `binary_search._evaluate_survivor`: `keep_cells` があり `survivor` が保持セルを欠くと `RuntimeError`（黙って塗り直さない）。段階3・段階4の全評価がここを通る。
 - **不変条件**: `keep_cells` が与えられた探索が作る全候補・全合格形状で `mask[keep].all()`。テストは `tests/topopt/test_binary_search_keep.py`（m=1,2,3）。
-- 変えていないもの: `keep_cells is None` の経路（`PeelStats` の項目・診断のキーも同じ）、`acceptance.inspect` の6条件の並び・報告の形、合格条件(3)（保持CADとの共通体積）、代表応力（99.5% 点）の母集団（保持セルも入る）、除外ソリッドのボクセル化。
+- 変えていないもの: `keep_cells is None` の経路（`PeelStats` の項目・診断のキーも同じ）、`acceptance.inspect` の6条件の並び・報告の形、合格条件(3)（保持CADとの共通体積）、代表応力の母集団（製品の探索と6条件は `member_volume_mm3` を渡し、代表応力は部材域＝保持セルを除く領域の固定物理体積の上位値。保持も母集団に入る99.5% 点は `member_volume_mm3` を渡さない検査・研究の経路だけ）、除外ソリッドのボクセル化。
 
 ## 依存してはいけないもの
 

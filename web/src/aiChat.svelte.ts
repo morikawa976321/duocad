@@ -20,7 +20,7 @@ export function createAiChat(deps: {
   send: (text: string) => void
   fail: (message: string) => void
   inform: (message: string) => void
-  /** パネルが画面に出ていないか(右サイドバーを閉じている)。 */
+  /** 会話欄が画面に見えていないか(右サイドバーを閉じている、または AI パネルを畳んでいる)。 */
   hidden: () => boolean
 }): AiChat {
   let status = $state<AiStatus | null>(null)
@@ -60,7 +60,8 @@ export function createAiChat(deps: {
     },
     onError(message) {
       push({ kind: 'error', message })
-      deps.fail(`AI ${message}`)
+      // 会話欄に出ているときは二重に出さない。
+      if (deps.hidden()) deps.fail(`AI ${message}`)
     },
     send(text) {
       push({ kind: 'user', text })

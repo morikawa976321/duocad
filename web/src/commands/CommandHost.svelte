@@ -46,6 +46,7 @@
     buildArgs,
     commitsGhost,
     findCommand,
+    evictionsForClick,
     firstMissingArg,
     itemsForArg,
     needsEnter,
@@ -136,7 +137,8 @@
     /** 起動(`start()`)の瞬間に呼ばれる。形状最適化の4つのverbが、既存の割り当てをプリセレクトして見せるために使う(`App.svelte`)。 */
     onStart?: (verb: string) => void
     /** 起動中のコマンドが終わった(Esc・中断ボタン・確定成功)ときに呼ばれる。無起動・既定「選ぶ」のEscでは呼ばない。アプリ層が選択を全解除するための知らせ。 */
-    onEnd?: (verb: string) => void
+    /** `staged` は、終わったのが構えた verb(サーバの作業空間に載り、終わりが配信で届く)か。ローカルのコマンド(測定など)は偽。 */
+    onEnd?: (verb: string, staged: boolean) => void
     /** 構える対象の verb を起動する(サーバの `begin_command`)。 */
     onBegin?: (verb: string, args: Record<string, unknown>) => void
     /** 起動中の verb の引数を併合する(サーバの `set_command_args`。`null` の値はそのキーを外す)。 */
@@ -312,6 +314,7 @@
   /** 画面に出す1行(何を待っているか)。無起動では空文字。 */
   const prompt = $derived.by(() => {
     if (command === null) return ''
+    if (waitSeconds !== null) return `計算中 ${waitSeconds} 秒`
     if (expressionError !== null) return expressionError
     // 選び間違い(選ばれすぎ・食えない面)は、ほかの引数を打つより先に直してもらう。
     if (overflow !== '') return overflow
@@ -320,6 +323,12 @@
     // 断られている間は「Enterで確定」と言わない(押しても同じ理由で断られる)。
     if (previewFailure !== null && previewFailure.key === previewKey) return `プレビューできない: ${previewFailure.message}`
     return expressionEcho === '' ? 'Enterで確定 / Escで中断' : `${expressionEcho} ・ Enterで確定`
+  })
+
+  /** 無起動のときの待ちの1行。起動中にツールバーの高さを保つ場所取りが同じ文字を持つ(折り返しが無起動のときと同じになる)。 */
+  let idlePrompt = $state('')
+  $effect(() => {
+    if (!commandActive) idlePrompt = prompt
   })
 
   /** いま直接ピックを待っている引数(なければ null)。必須は収集の順(`missing`)、省略可は「指す」ボタンで構えたときだけ(`armedPick`)。構えたほうが勝つ。 */
@@ -480,6 +489,7 @@
       // 成功なら配信で `command` が null になり `ended()` が消す。降ろすのは幽霊と即適用の待ち受け、出しかけの引数だけ。
       // 印は `onRun` より先に立てる: 繋がっていなくて送れなかったときは `onRun` の中で同期に `commitFailed()` が呼ばれて降りる。
       committed = true
+      startWaitDisplay()
       armedSelections = null
       sharedArgs.cancel()
       preview.cancel()
@@ -494,16 +504,60 @@
   /** 確定を送ったが成否が未確定の間。Enter の二度打ちと幽霊の出し直しを止める。失敗(`commitFailed()`)か終わり(`ended()`)で降りる。 */
   let committed = false
 
+  /** 確定の応答待ちがこれを超えたら、待ちの1行に経過秒を出す。置いた値(実測でない。重いフィレットは最長 20 秒で断られる)。 */
+  const LONG_WAIT_MS = 3000
+  /** 長い応答待ちの経過秒(出さない間は `null`)。 */
+  let waitSeconds = $state<number | null>(null)
+  let waitTimer: ReturnType<typeof setInterval> | null = null
+
+  function startWaitDisplay(): void {
+    stopWaitDisplay()
+    const startedAt = Date.now()
+    waitTimer = setInterval(() => {
+      const elapsed = Date.now() - startedAt
+      waitSeconds = elapsed >= LONG_WAIT_MS ? Math.floor(elapsed / 1000) : null
+    }, 250)
+  }
+
+  function stopWaitDisplay(): void {
+    if (waitTimer !== null) clearInterval(waitTimer)
+    waitTimer = null
+    waitSeconds = null
+  }
+
   /** 確定した verb がサーバで失敗した・送れなかったときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
-  export function commitFailed(): void {
+  export function commitFailed(sendOnly = false): void {
+    // `sendOnly`: 繋がっていなくて送れなかっただけの失敗。確定を送っていなければ(切断中のプレビューなど)入力欄を動かさない。
+    if (sendOnly && !committed) return
     committed = false
+    stopWaitDisplay()
     commitOnEntry = null
+    refocusEdited()
+  }
+
+  /** 最後に打った引数欄の `id`(確定が断られたとき、直す欄へ戻る先)。 */
+  let lastEditedId: string | null = null
+
+  /** 断られた確定の直し先: 最後に打った欄を全選択する。外の入力欄で打っている最中・その欄が無いときは `focusFirstNumber` に任せる。 */
+  function refocusEdited(): void {
+    const input = lastEditedId === null ? null : document.getElementById(lastEditedId)
+    const active = document.activeElement
+    const typingOutside =
+      active instanceof HTMLElement &&
+      (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
+      !overlayEl?.contains(active)
+    if (input instanceof HTMLInputElement && !typingOutside) {
+      input.focus()
+      input.select()
+      return
+    }
     focusFirstNumber()
   }
 
   /** 繋ぎ直したときに `App.svelte` が呼ぶ。送った確定の返事は来ないので、待っている印を降ろす(構えはサーバの配信が正)。 */
   export function reconnected(): void {
     committed = false
+    stopWaitDisplay()
     commitOnEntry = null
   }
 
@@ -549,6 +603,7 @@
     armedPick = null
     previewFailure = null
     committed = false
+    stopWaitDisplay()
     // 即適用の待ち受けも降ろす。構え直すのは `entered()` / `restart()` だけ。
     armedSelections = null
     sharedArgs.reset()
@@ -591,7 +646,7 @@
 
   function ended(verb: string): void {
     resetInputs()
-    onEnd(verb)
+    onEnd(verb, isStageable(verb))
   }
 
   /** 引数を空にして即適用の待ち受けを構える。ここで控えた数より後のクリックだけが即適用の引き金になる(起動前から揃っていた選択では発火せず、Enterかボタンの押し直しが適用の1手)。 */
@@ -715,7 +770,9 @@
   function syncOverlayHeight(el: HTMLDivElement | null): void {
     const root = document.querySelector('.app')
     if (!(root instanceof HTMLElement)) return
-    const h = el?.getBoundingClientRect().height ?? 0
+    // ビューポート側(`.main`)へ重なる分だけ。overlay の上端は `.toolbar` の下端 padding に食い込んでいるので、自身の高さより小さい。
+    const mainTop = root.querySelector('.main')?.getBoundingClientRect().top ?? 0
+    const h = el === null ? 0 : Math.max(0, el.getBoundingClientRect().bottom - mainTop)
     root.style.setProperty('--toolbar-overlay-h', h > 0 ? `${Math.ceil(h)}px` : '0px')
     root.classList.toggle('toolbar-overlay-open', h > 0)
   }
@@ -739,6 +796,7 @@
   onDestroy(() => {
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
+    stopWaitDisplay()
     sharedArgs.dispose()
     preview.detach()
   })
@@ -748,6 +806,15 @@
     if (command === null) return false
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'point') return false
+    // この1クリックで確定まで走るのに形にならない点(始点と同じ場所など)は入れない: 入れると点が残り、待っている点が無くなって次のクリックが選択に流れる。
+    const next: ArgValues = { ...values, [spec.name]: [u, v] }
+    if (!needsEnter(command) && firstMissingArg(command, next) === null) {
+      const result = buildArgs(command, next)
+      if (!result.ok) {
+        onNote(`${result.reason}。別の点をクリックする`)
+        return true
+      }
+    }
     points = { ...points, [spec.name]: [u, v] }
     // この1クリックで引数が揃い Enter が要らないなら、そのまま適用する(線分の2点目)。確定成功で無起動へ戻る(`commandSucceeded()`)ので、続けるにはツールボタンを押し直す。
     if (!needsEnter(command) && firstMissingArg(command, values) === null) {
@@ -756,6 +823,29 @@
     }
     focusFirstNumber()
     return true
+  }
+
+  /**
+   * 打ちかけの点があれば、最後に打った1点を戻す(Backspace と、`App.svelte` の Ctrl+Z)。戻したときだけ `true`。
+   * 点は宣言の順に埋まる(`addPoint`)ので、最後の点は宣言でいちばん後ろの打ってある点。コマンドは開いたまま。
+   */
+  export function undoLastPoint(): boolean {
+    if (command === null || !commandActive || committed) return false
+    const last = [...command.args].reverse().find((spec) => spec.kind === 'point' && points[spec.name] !== undefined)
+    if (last === undefined) return false
+    const { [last.name]: _removed, ...rest } = points
+    points = rest
+    return true
+  }
+
+  /** 個数の上限がある選択引数に、クリックで1つ足すと上限を超えるとき、置き換えで外す最古の選択(`evictionsForClick`)。 */
+  export function evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[] {
+    return command === null ? [] : evictionsForClick(command, values, ref, items, faceKindOf)
+  }
+
+  /** このコマンドの引数の欄で、文字が入っていないもの。Ctrl+Z・Backspace を欄でなくアプリへ回してよい(奪っても失う文字が無い)。 */
+  export function isEmptyArgField(target: EventTarget | null): boolean {
+    return target instanceof HTMLInputElement && target.value === '' && overlayEl?.contains(target) === true
   }
 
   /** スケッチモードで待っている点があるか(App.svelte がクリックの行き先を決める)。 */
@@ -883,7 +973,17 @@
         (candidate) =>
           (missing === null || candidate.fromPoints === true) && (numberText[candidate.name] ?? '') === '',
       )
-      if (spec !== undefined) document.getElementById(spec.inputId)?.focus()
+      if (spec !== undefined) {
+        document.getElementById(spec.inputId)?.focus()
+        return
+      }
+      // 数値欄が無く、前回の文字(ファイルのパス)が残って揃っているときは、その欄を全選択して打ち直せるようにする(Enter だけで前と同じファイルを読み込ませない)。
+      const kept = missing === null ? textArgs.find((candidate) => (textValues[candidate.name] ?? '') !== '') : undefined
+      const input = kept === undefined ? null : document.getElementById(kept.inputId)
+      if (input instanceof HTMLInputElement) {
+        input.focus()
+        input.select()
+      }
     })
   }
 
@@ -934,6 +1034,16 @@
       return
     }
     if (event.key === 'Delete' || event.key === 'Backspace') {
+      // 打ちかけの点があるとき、Backspace は最後の1点を戻す。欄にフォーカスがあるときは、その欄が空のときだけ(文字があれば欄の1文字削除)。
+      if (
+        event.key === 'Backspace' &&
+        !(event.repeat || event.ctrlKey || event.metaKey || event.altKey) &&
+        (!isTextEntry(focused) || isEmptyArgField(focused)) &&
+        undoLastPoint()
+      ) {
+        event.preventDefault()
+        return
+      }
       if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || isTextEntry(focused)) return
       if (pressDelete()) event.preventDefault()
       return
@@ -966,7 +1076,15 @@
           (candidate.kind === 'number' || candidate.kind === 'text') &&
           !argSatisfied(candidate, values),
       )
-    if (!remaining || (remaining.kind !== 'number' && remaining.kind !== 'text')) return
+    if (!remaining || (remaining.kind !== 'number' && remaining.kind !== 'text')) {
+      // 打つ欄がもう無く選択肢が未決なら、その先頭のボタンへ進む(選択肢の行は DOM で欄より前にあり、素の Tab では届かない)。
+      const open = choiceArgs.find((candidate) => !argSatisfied(candidate, values))
+      const first = open?.options[0]
+      if (first === undefined) return
+      event.preventDefault()
+      document.getElementById(first.buttonId)?.focus()
+      return
+    }
     event.preventDefault()
     document.getElementById(remaining.inputId)?.focus()
   }
@@ -988,7 +1106,7 @@
           class:on={command !== null && candidate.id === command.id}
           onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
           disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
-          title={command !== null && candidate.id === command.id && needsEnter(candidate) ? 'もう一度押すか Enter で確定' : undefined}
+          title={command !== null && candidate.id === command.id && needsEnter(candidate) ? 'もう一度押すか Enter で確定' : candidate.title}
         >
           <!-- 押している間も文言を変えない: 幅が伸びるとツールバーの行が組み替わり、1280px 幅で後ろのボタンが2行目へ落ちた。
                Enter で確定することは `#command-prompt` が出す。 -->
@@ -997,6 +1115,9 @@
       {/each}
       {#if !commandActive}
         <span id="command-prompt" class:dim={!ready}>{prompt}</span>
+      {:else}
+        <!-- 起動中は待ちの1行が引数の行(overlay)へ移る。ここに空けておかないと、ツールバーが縮んでビューポートが伸びる。 -->
+        <span class="prompt-space" aria-hidden="true">{idlePrompt}</span>
       {/if}
     </div>
   </div>
@@ -1011,6 +1132,7 @@
         {#each spec.options as option (option.value)}
           <button
             id={option.buttonId}
+            title={option.title}
             class:on={(choices[spec.name] ?? spec.default) === option.value}
             onclick={(event) => {
               choices = { ...choices, [spec.name]: option.value }
@@ -1068,6 +1190,7 @@
           value={textValues[spec.name] ?? ''}
           oninput={(event) => {
             textValues = { ...textValues, [spec.name]: (event.target as HTMLInputElement).value }
+            lastEditedId = spec.inputId
           }}
           onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}
@@ -1091,6 +1214,7 @@
           value={numberText[spec.name] ?? ''}
           oninput={(event) => {
             numberText = { ...numberText, [spec.name]: (event.target as HTMLInputElement).value }
+            lastEditedId = spec.inputId
           }}
           onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}

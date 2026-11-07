@@ -30,6 +30,13 @@ assert.equal(ownsEnterKey({ tagName: 'BODY' }), false)
 assert.equal(ownsEnterKey({ tagName: 'DIV', isContentEditable: false }), false)
 assert.equal(ownsEnterKey({ tagName: 'CANVAS' }), false)
 assert.equal(ownsEnterKey(null), false)
+// 表示のチェックボックス・スライダーにフォーカスが残っていても Enter は窓のもの。文字欄・押せる型は譲る。
+for (const type of ['checkbox', 'radio', 'range', 'CHECKBOX']) {
+  assert.equal(ownsEnterKey({ tagName: 'INPUT', type }), false, `INPUT ${type} は Enter を使わない`)
+}
+for (const type of ['text', 'number', 'button', 'submit', 'file', 'color']) {
+  assert.equal(ownsEnterKey({ tagName: 'INPUT', type }), true, `INPUT ${type} は Enter を自分で使う`)
+}
 
 // 文字を打つ欄。`type` を持たない INPUT は text。
 for (const target of [

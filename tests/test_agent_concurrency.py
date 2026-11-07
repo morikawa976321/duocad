@@ -35,7 +35,8 @@ def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_sess
     実測: `require_visible` を課す前はこの手順で `fillet` が成功していた。
     """
     commit_edge(box_session)
-    box_session.set_visible("box", False)  # 人が隠す(選択は消えない = 選択の外の経路)
+    # `set_visible` は選択から外すので、選択の外の経路で隠れた状態(隠れた項目が選択に残る)を直接作る
+    box_session.document.get_body("box").visible = False
     assert len(selection.get_selection(box_session.document).items) == 1
 
     with pytest.raises(ValueError, match="hidden"):

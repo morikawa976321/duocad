@@ -94,6 +94,9 @@ INITIAL_RETRY_DELAY = 0.5
 MAX_RETRY_DELAY = 8.0
 #: `retry-after` をこの秒数まで信じる(超える指示は無視して上の間隔で待つ。SDKと同じ)。
 MAX_RETRY_AFTER = 60.0
+#: 200 で始まったあとの `error` イベントは HTTP の status を持たない。再試行する種類だけ、同じ意味の status に読み替える。
+#: 応答は組み終わるまで画面へ出さない(`StreamingTransport` は畳んだ結果を返すだけ)ので、途中の失敗をやり直しても利用者には何も見えない。
+STREAM_ERROR_STATUSES = {"overloaded_error": 529, "api_error": 500, "rate_limit_error": 429}
 
 #: 失敗の本文をこの長さで切る(モデルへ返す文が無限に伸びないように)。
 MAX_ERROR_CHARS = 400
@@ -348,8 +351,11 @@ def _assemble_anthropic(events: Iterator[dict], url: str) -> dict:
     for event in events:
         kind = event.get("type")
         if kind == "error":
+            error = event.get("error")
             raise _failure(
-                f"{_origin(url)} が途中で失敗した", json.dumps(event.get("error"), ensure_ascii=False)
+                f"{_origin(url)} が途中で失敗した",
+                json.dumps(error, ensure_ascii=False),
+                STREAM_ERROR_STATUSES.get(error.get("type")) if isinstance(error, dict) else None,
             )
         index = event.get("index")
         if kind == "message_start" and isinstance(event.get("message"), dict):

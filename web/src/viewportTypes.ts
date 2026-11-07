@@ -286,6 +286,8 @@ export interface PickEvent {
   sketchGuide: SketchGuideHit | null
   /** スケッチモード中の、クリックした点のスケッチ平面上の座標。平面がカメラの裏なら null。 */
   point: { sketchId: string; u: number; v: number } | null
+  /** `point` が null なのは視線が平面に浅すぎるから(`'shallow'`。点として受けない理由を知らせるため)。 */
+  pointRefused?: 'shallow' | null
   /**
    * 当たった領域(スケッチ+添字)。スケッチモード中はそのスケッチの領域、通常モードでは見えている全スケッチの領域。
    * 通常モードで領域と面が重なる画素は面が勝つ(同じ細かさならソリッドが先)。
@@ -354,10 +356,6 @@ export interface SketchGuideHit {
 }
 
 /**
- * 左ドラッグのウィンドウ選択の結果(矩形に完全包含され、一部でも見えているものだけ)。
- * 何も囲まなかったドラッグも空配列で呼ぶ(修飾なしなら選択を空にする)。
- */
-/**
  * 視点の控え(`Viewport.viewSnapshot`)。矩形を引いた後に辺・頂点の到着を待つ間にカメラが動いても、引いたときの視点で集め直す。
  * 視点が同じかを数で比べて捨てる作りにはしない: スケッチモードの `OrbitControls` は止まっていても行列を 1e-8 ほど揺らし続け、
  * 0 の符号(`-0.000000`)や丸めの境目をまたいで「動いた」と見る(投影の起動中の矩形選択が何も選ばなかった。実測)。
@@ -368,6 +366,10 @@ export interface ViewSnapshot {
   readonly height: number
 }
 
+/**
+ * 左ドラッグのウィンドウ選択の結果(矩形に完全包含され、一部でも見えているものだけ)。
+ * 何も囲まなかったドラッグも空配列で呼ぶ(修飾なしなら選択を空にする)。
+ */
 export interface BoxSelectEvent {
   faces: FaceRef[]
   edges: EdgeRef[]
@@ -559,6 +561,7 @@ export interface Viewport {
    * (`commands/grain.ts`。クリックで選ばれるものとホバーで光るものを揃える)。
    */
   setHoverGrain(grain: { body: boolean; entity: boolean }): void
+  setBrowserHover(bodyId: string | null): void
   /**
    * その辺と同じ連なりの辺の添字(`groupEdgeChains(false)` の間はその辺だけ)。
    * 連なりの単位で扱っているのに、その辺の連なりがまだ届いていなければ `null`。
@@ -595,6 +598,7 @@ export interface Viewport {
   renderCount(): number
   /** 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げる。 */
   hoveredRef(): {
+    body: string | null
     face: FaceRef | null
     edge: EdgeRef | null
     vertex: VertexRef | null
@@ -677,6 +681,10 @@ export interface Viewport {
   frameAll(): void
   /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る(干渉チェックの行から)。 */
   frameBodies(bodyIds: readonly string[]): void
+  /** 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(全体表示)。何も無ければ既定の視点。 */
+  frameVisible(): void
+  /** スケッチ `sketchId` の図形 `entityIds` が収まる所へ、今の向きのまま寄る(SVG 取り込みの後)。 */
+  frameSketchEntities(sketchId: string, entityIds: readonly string[]): void
   /** 新規文書にしたときに呼ぶ。カメラは動かさず、基準グリッドの縮小だけを許可する。 */
   resetGrid(): void
   /** 左ドラッグのウィンドウ選択が終わったときに呼ばれる。ドラッグの向きは見ない(本人明言)。 */
@@ -692,6 +700,8 @@ export interface Viewport {
   // ------------------------------------------------------------------ 可変解像度(ズーム連動)
   /** 今の画面が要求している解像度。 */
   viewResolution(): ViewportResolution
+  /** 次に落ち着いたとき、見え方が同じでも `onResolutionChange` をもう一度呼ぶ(文書の切り替え)。 */
+  reapplyResolution(): void
   /**
    * face単位の高精度化(視錐台+バックフェイスカリング)を切る/入れる(既定は入り)。
    * 実機検査のための穴(`web/scripts/smoke-face-culling.mjs`)。切ると `focus` を送らなくなり、

@@ -176,8 +176,8 @@
     {/if}
     {#if aiStatus?.apiKeySource === 'file'}
       {#if confirmingKeyDelete}
-        <span class="confirm-text">消すと戻せない</span>
-        <button id="settings-api-key-delete-confirm" class="danger" onclick={deleteKey} title="保存したキーを消す(戻せない)">
+        <span class="confirm-text">削除は戻せない</span>
+        <button id="settings-api-key-delete-confirm" class="danger" onclick={deleteKey} title="保存したキーを削除(戻せない)">
           本当に削除
         </button>
         <button id="settings-api-key-delete-cancel" onclick={() => (confirmingHint = null)}>やめる</button>

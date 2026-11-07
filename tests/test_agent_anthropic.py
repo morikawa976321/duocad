@@ -183,15 +183,46 @@ def test_the_stream_is_folded_and_reading_stops_at_message_stop():
     assert server.received[0]["stream"] is True
 
 
-def test_an_error_event_mid_stream_fails_the_request_without_a_retry():
-    script = [
+def mid_stream_error(kind: str) -> bytes:
+    return b"".join([
         event({"type": "message_start", "message": {"id": "m1", "content": [], "usage": {}}}),
-        event({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+        event({"type": "error", "error": {"type": kind, "message": "Overloaded"}}),
+    ])
+
+
+@pytest.mark.parametrize("kind", ["overloaded_error", "api_error", "rate_limit_error"])
+def test_an_error_event_mid_stream_is_retried_like_the_same_error_before_the_stream(monkeypatch, kind):
+    """落ちたら、200 で始まったあとの過負荷が HTTP の 529 と違って再試行されず、その依頼が落ちる。"""
+    monkeypatch.setattr(providers, "INITIAL_RETRY_DELAY", 0.0)
+    responses = [
+        (200, {"content-type": "text/event-stream"}, mid_stream_error(kind)),
+        (200, {"content-type": "text/event-stream"}, b"".join(streamed_tool_call())),
     ]
-    with serving(script) as server:
+    with answering(responses) as server:
+        reply = ask(provider_for(server))
+    assert reply.stop == "tool_use"
+    assert len(server.received) == 2
+
+
+def test_an_error_event_mid_stream_stops_after_the_retry_limit(monkeypatch):
+    monkeypatch.setattr(providers, "INITIAL_RETRY_DELAY", 0.0)
+    responses = [(200, {"content-type": "text/event-stream"}, mid_stream_error("overloaded_error"))] * (MAX_RETRIES + 2)
+    with answering(list(responses)) as server:
         with pytest.raises(ProviderError) as caught:
             ask(provider_for(server))
     assert "overloaded_error" in str(caught.value)
+    assert len(server.received) == MAX_RETRIES + 1
+
+
+def test_a_mid_stream_error_of_another_kind_is_not_retried():
+    """再試行するのは混雑の種類だけ。リクエストの誤りは何度送っても同じ。"""
+    script = [
+        event({"type": "message_start", "message": {"id": "m1", "content": [], "usage": {}}}),
+        event({"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}),
+    ]
+    with serving(script) as server:
+        with pytest.raises(ProviderError):
+            ask(provider_for(server))
     assert len(server.received) == 1
 
 

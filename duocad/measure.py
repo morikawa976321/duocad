@@ -18,8 +18,8 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 
 `from` / `to` は画面が線で描くための2点で、直線側は辺(線分)の中点・平面側は面(領域)の面積重心を起点にする。
 
-平行の判定は `PARALLEL_SIN_TOLERANCE`(sin θ)。述語の `PARALLEL_TOLERANCE`(1e-3 ≈ 2.6度)は
-粗すぎ、測定に使うと 2度傾いた面どうしの「距離」が出てしまう。
+平行の判定は `PARALLEL_SIN_TOLERANCE`(sin θ)。述語の `PARALLEL_TOLERANCE`(内積で 1e-6 ≈ 0.08度)は
+粗く、測定に使うと 0.05度傾いた面どうしの「距離」が出てしまう。
 
 OCP / build123d を import しない(幾何は `kernel` / `query` から数値で受け取る)。
 """
@@ -252,8 +252,9 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "start": described["start"],
             "end": described["end"],
             "edge_kind": described["kind"],
+            "degenerate": described["degenerate"],
         }
-        if described["kind"] == "circle":
+        if described["kind"] == "circle" and not described["degenerate"]:
             item["center"], item["radius"] = _brep_geometry.edge_circle(body.shape, int(ref["index"]))
         if described["kind"] != "line":
             return item, (
@@ -367,7 +368,7 @@ def inspect_selection(session: Any) -> Union[dict, None]:
 def measure_selection(session: Any) -> dict:
     """いまの選択を測る。
 
-    戻り値は `{"count", "items", "total_area", "total_length"}`。**ちょうど2項目のときだけ**
+    戻り値は `{"count", "items", "total_area", "total_length"}`(`total_length` は辺とスケッチの線分・楕円の長さの合計)。**ちょうど2項目のときだけ**
     `between`(`between()`)と `between_error`(測れない理由。測れたなら None)と `between_error_items`
     (測れない項目の `items` での添字。測れたなら空)が加わる。
     """
@@ -383,7 +384,7 @@ def measure_selection(session: Any) -> dict:
         measurables.append(measurable)
         if kind in ("face", selection.REGION_KIND):
             total_area += item["area"]
-        elif kind == "edge":
+        elif kind == "edge" or (kind == selection.SKETCH_ENTITY_KIND and "length" in item):
             total_length += item["length"]
     result: dict = {
         "count": len(items),

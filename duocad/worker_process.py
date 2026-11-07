@@ -99,7 +99,8 @@ class WorkerProcess:
         """子へ要求を送り、返事の `result` を返す。子が無ければ起動して `load` を送る(子の起動もその時間も `timeout` の内)。
         `timeout` が None なら上限なし(取り消しは効く)。"""
         deadline = math.inf if timeout is None else time.monotonic() + timeout
-        if self._process is not None and self._process.poll() is not None:
+        process = self._process
+        if process is not None and process.poll() is not None:
             self._kill()  # 要求の合間に死んだ子(このまま送ると、送った要求ごと失敗する)
             self.revived += 1
         if self._process is None:
@@ -114,6 +115,10 @@ class WorkerProcess:
 
     def close(self) -> None:
         self._kill()
+
+    def is_alive(self) -> bool:
+        process = self._process
+        return process is not None and process.poll() is None
 
     def stderr_tail(self) -> str:
         with self._stderr_lock:

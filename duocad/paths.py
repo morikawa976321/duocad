@@ -23,5 +23,8 @@ def resolve_user_path(path: Any) -> Path:
 
     ブラウザからは `model.json` のような相対パスが来る。解決はここ1箇所で行う。
     """
-    resolved = Path(str(path)).expanduser()
+    text = str(path).strip()
+    if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
+        text = text[1:-1]
+    resolved = Path(text).expanduser()
     return resolved if resolved.is_absolute() else (Path.cwd() / resolved).resolve()

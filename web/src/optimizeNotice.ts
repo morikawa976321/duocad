@@ -49,7 +49,7 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
       `安全率の${searched}`,
       minWidth,
       ...neckLines(result.final_check?.neck ?? null),
-      '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
+      '元のボディは1つも削除されていない。結果は表示とSTL書き出しだけができる(編集はできない)',
       ...(result.warning ? [result.warning] : []),
     ],
   }

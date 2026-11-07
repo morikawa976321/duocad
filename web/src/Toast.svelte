@@ -1,7 +1,7 @@
 <script module lang="ts">
   /**
    * トースト — エラー(`fail`、琥珀の札)と、見落とされると困る知らせ(`inform`、無彩色の札)。
-   * 公開APIは `fail` / `inform` / `errorLog` だけ。種別は関数名で分け、引数は文字列1つ(`fail(msg, 'warn')` のような口を
+   * 公開APIは `fail` / `inform` / `errorLog` と、解けた失敗の札を外す `withdraw` だけ。種別は関数名で分け、引数は文字列1つ(`fail(msg, 'warn')` のような口を
    * 開けると呼ぶ側が分類を判断することになり、エラー経路を1本にした意味が消える)。
    *
    * ```ts
@@ -32,6 +32,10 @@
     /** この札が出ている間に同じ文言が来た回数。2以上のときだけ画面に出す。 */
     count: number
     copied: boolean
+    /** カーソルがボタンの上にある。 */
+    hovered: boolean
+    /** キーボードのフォーカスがボタンにある(`:focus-visible`)。マウスで押した後のフォーカスは数えない(数えると、コピーを押した札が消えなくなる)。 */
+    focused: boolean
     timer: ReturnType<typeof setTimeout> | null
   }
 
@@ -61,9 +65,29 @@
     item.timer = null
   }
 
+  /** 消える予約を掛け直す。カーソルが載っている間・キーボードのフォーカスがある間・タブが裏にある間は掛けない(戻ったときに `setHovered` / `setFocused` / `onVisibility` が掛け直す)。 */
   function restart(item: ToastItem): void {
     stop(item)
+    if (item.hovered || item.focused || document.hidden) return
     item.timer = setTimeout(() => dismiss(item.id), LIFETIME_MS)
+  }
+
+  function setHovered(item: ToastItem, hovered: boolean): void {
+    item.hovered = hovered
+    restart(item)
+  }
+
+  function setFocused(item: ToastItem, focused: boolean): void {
+    item.focused = focused
+    restart(item)
+  }
+
+  function onFocusIn(item: ToastItem, event: FocusEvent): void {
+    setFocused(item, event.target instanceof Element && event.target.matches(':focus-visible'))
+  }
+
+  function onVisibility(): void {
+    for (const item of items) restart(item)
   }
 
   function dismiss(id: number): void {
@@ -98,6 +122,8 @@
       message: text,
       count: 1,
       copied: false,
+      hovered: false,
+      focused: false,
       timer: null,
     }
     const next = [created, ...items]
@@ -115,6 +141,16 @@
     show('error', text)
   }
 
+  /**
+   * 出ているエラーの札のうち、`text` で終わる文言のものを外す(`fail` へ渡した文言は呼ぶ側が `エラー[verb] ` を前置きすることがある)。
+   * 失敗の原因が解けたとき(再接続など)に、古い札が「いまも繋がらない」と言い続けないために使う。控え(`errorLog`)は消さない。
+   */
+  export function withdraw(text: string): void {
+    for (const item of items.filter((candidate) => candidate.kind === 'error' && candidate.message.endsWith(text))) {
+      dismiss(item.id)
+    }
+  }
+
   /** 失敗ではない知らせを札に出す。控え(`errorLog`)には積まない(控えはエラーの記録)。 */
   export function inform(message: string): void {
     const text = message.trim()
@@ -126,6 +162,7 @@
 <!-- `id="toasts"` は実機検査が文言を読む穴(`.toast-text` がエラー1枚の本文)。中身が空でも枠は出す。
      知らせの本文は `.toast-info-text` に分ける: smoke 群は `#toasts .toast-text` を「エラーが出た」と読むので、
      同じクラスにすると知らせの札で検査が赤くなる。 -->
+<svelte:document onvisibilitychange={onVisibility} />
 <div id="toasts" class="toasts" role="log" aria-live="assertive" aria-relevant="additions">
   {#each items as item (item.id)}
     <div class="toast" class:info={item.kind === 'info'}>
@@ -133,12 +170,20 @@
       {#if item.count > 1}
         <span class="toast-count">{item.count}回</span>
       {/if}
-      <div class="toast-actions">
+      <div
+        class="toast-actions"
+        role="group"
+        onmouseenter={() => setHovered(item, true)}
+        onmouseleave={() => setHovered(item, false)}
+        onfocusin={(event) => onFocusIn(item, event)}
+        onfocusout={() => setFocused(item, false)}
+      >
         <button
           type="button"
           class="toast-copy"
           class:copied={item.copied}
           aria-label={item.copied ? 'コピーしました' : item.kind === 'info' ? '文をコピー' : 'エラー文をコピー'}
+          title={item.copied ? 'コピーしました' : item.kind === 'info' ? '文をコピー' : 'エラー文をコピー'}
           onclick={() => copyMessage(item)}
         >
           {#if item.copied}
@@ -159,7 +204,7 @@
             </svg>
           {/if}
         </button>
-        <button type="button" class="toast-close" aria-label="この通知を閉じる" onclick={() => dismiss(item.id)}>
+        <button type="button" class="toast-close" aria-label="この通知を閉じる" title="この通知を閉じる" onclick={() => dismiss(item.id)}>
           ×
         </button>
       </div>
@@ -225,11 +270,24 @@
 
   .toast-copy,
   .toast-close {
+    position: relative;
     padding: 0 6px;
     line-height: 1.2;
     border-color: transparent;
     background: transparent;
     color: var(--dim);
+  }
+
+  /* 見た目の大きさは変えず、当たりだけを縦横 24px 以上に広げる(小さいボタンを狙わせない)。 */
+  .toast-copy::before,
+  .toast-close::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 24px);
+    height: max(100%, 24px);
+    transform: translate(-50%, -50%);
   }
 
   .toast-copy.copied {

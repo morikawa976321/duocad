@@ -38,6 +38,8 @@
   }
 
   const STATUS_POLL_MS = 30 * 60 * 1000
+  /** 窓が前面に戻ったときの確認を、直前の確認からこれだけ空いていなければ省く。置いた値(実測ではない)。 */
+  const FOCUS_REFRESH_MIN_MS = 60 * 1000
 
   let config = $state<ServerConfig | null>(null)
   /** 取りに行く前に札を出すと、安定版でも一瞬「開発版」が出る。 */
@@ -49,7 +51,10 @@
     config?.version?.commit ? `${config.version.commit} (${config.version.date?.slice(0, 10) ?? ''})` : '',
   )
 
+  let lastCheckedAt = 0
+
   async function refreshStatus(force = false): Promise<void> {
+    lastCheckedAt = Date.now()
     const next = await fetchJson<UpdateStatus>(`api/update${force ? '?force=1' : ''}`)
     if (next) status = next
   }
@@ -62,24 +67,27 @@
       else if (result.restored === false) fail(`GPU の部品を入れられず、元の構成にも戻せなかった: ${result.message}(ログ: ${result.log})`)
       else fail(`GPU の部品を入れられなかったので、CPU の構成に戻した: ${result.message}(ログ: ${result.log})`)
     } else if (result.ok) {
-      inform(result.from === result.to ? '更新済み(変更なし)' : `更新した(${short(result.from)} → ${short(result.to)})`)
+      inform(result.from === result.to ? 'アップデート済み(変更なし)' : `アップデートした(${short(result.from)} → ${short(result.to)})`)
     } else if (result.restored === false) {
-      fail(`更新に失敗し、元の版にも戻せなかった: ${result.message}(ログ: ${result.log})`)
+      fail(`アップデートに失敗し、元の版にも戻せなかった: ${result.message}(ログ: ${result.log})`)
     } else {
-      fail(`更新に失敗したので元の版に戻した: ${result.message}(ログ: ${result.log})`)
+      fail(`アップデートに失敗したので元の版に戻した: ${result.message}(ログ: ${result.log})`)
     }
   }
 
   function startUpdate(): void {
     void restartServer('api/update', {
-      title: '更新中…',
+      title: 'アップデート中…',
       detail: '取り込みとビルドが終わると、自動で読み直す(数分かかることがある)',
-      failPrefix: '更新を始められなかった',
+      failPrefix: 'アップデートを始められなかった',
     }, fail)
   }
 
   onMount(() => {
     let timer: ReturnType<typeof setInterval> | null = null
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible' && Date.now() - lastCheckedAt >= FOCUS_REFRESH_MIN_MS) void refreshStatus()
+    }
     void (async () => {
       config = await loadConfig()
       loaded = true
@@ -98,9 +106,11 @@
       await refreshStatus(pending)
       if (pending) reportFinishedUpdate(status?.last_result)
       timer = setInterval(() => void refreshStatus(), STATUS_POLL_MS)
+      document.addEventListener('visibilitychange', onVisible)
     })()
     return () => {
       if (timer !== null) clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   })
 </script>
@@ -115,16 +125,20 @@
     disabled={restart.current !== null}
     title={`mainの新しい変更 ${status.behind}件(押すと再起動して取り込む):\n${status.commits.join('\n')}`}
   >
-    更新 {status.behind}
+    アップデート {status.behind}
   </button>
 {:else if status?.state === 'blocked'}
-  <span class="tag" title={status.reason ?? ''}>更新できない</span>
+  <span class="tag" title={status.reason ?? ''}>アップデートできない</span>
 {/if}
 
-{#if restart.current}
+{#if restart.current && !restart.closed}
   <div class="update-overlay" role="status" aria-live="polite">
     <p>{restart.current.title}</p>
     <p class="dim">{restart.current.detail}</p>
+    {#if restart.slow}
+      <p class="dim">3分たっても戻らない。立て直しは続けている。戻らないときは logs/ を見るか、画面を読み直すこと</p>
+      <button id="update-overlay-close" onclick={() => restart.close()}>閉じる</button>
+    {/if}
   </div>
 {/if}
 
@@ -153,5 +167,9 @@
 
   .update-overlay p {
     margin: 0;
+  }
+
+  .update-overlay button {
+    margin-top: 12px;
   }
 </style>

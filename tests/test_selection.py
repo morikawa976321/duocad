@@ -443,11 +443,40 @@ def test_a_failing_listener_does_not_undo_the_selection(session: Session):
 
 
 # ---------------------------------------------------------------- 隠したものを選択から外す・参照の形
+def test_hiding_a_body_drops_its_items_from_the_selection_and_showing_it_does_not_bring_them_back(two_bodies: Document):
+    """落ちたら、隠したボディの項目が選択に残り、「動かす」「削除」などが隠れていることを理由に別のボディごと断られる。"""
+    selection.set_selection(
+        two_bodies,
+        refs=[
+            shape_ref(two_bodies, "a", "face", 1),
+            shape_ref(two_bodies, "a", "edge", 1),
+            shape_ref(two_bodies, "b", "face", 1),
+        ],
+    )
+
+    set_visible(two_bodies, "a", False)
+    assert [(item["body"], item["kind"]) for item in selection.get_selection(two_bodies).items] == [("b", "face")]
+
+    set_visible(two_bodies, "a", True)
+    assert [item["body"] for item in selection.get_selection(two_bodies).items] == ["b"]
+
+
+def test_a_move_after_hiding_one_of_two_selected_bodies_moves_the_other(session: Session):
+    """落ちたら、2つ選んで片方を隠したあとの「動かす」が、隠した方を理由に全体ごと断られる。"""
+    first = pad(session, 10.0, 10.0, 5.0)
+    second = pad(session, 10.0, 10.0, 5.0, corner=(30.0, 0.0))
+    session.set_selection(
+        [{"body": first.id, "kind": "body", "index": None}, {"body": second.id, "kind": "body", "index": None}]
+    )
+    session.set_visible(second.id, False)
+
+    session.move_body(5.0, 0.0, 0.0)
+
+    assert session.document.log.entries[-1].args["bodies"] == [first.id]
 def test_a_hidden_body_that_is_still_selected_can_be_replaced_by_a_new_pick(two_bodies: Document):
     """落ちたら、選択に残った隠したボディの項目が `remove` を丸ごと拒否させ、画面の「いまの選択を外して新しく選ぶ」が失敗する。"""
     selection.set_selection(two_bodies, refs=[shape_ref(two_bodies, "a", "face", 1)])
-    set_visible(two_bodies, "a", False)
-    assert selection.get_selection(two_bodies).items, "可視性の切替で選択は飛ばない(前提)"
+    two_bodies.get_body("a").visible = False  # `set_visible` は項目を外すので、隠れた項目が残った状態を直接作る
 
     result = selection.modify_selection(
         two_bodies,
@@ -479,7 +508,7 @@ def test_toggling_a_selected_ref_of_a_hidden_body_removes_it_but_a_hidden_one_ca
     selection.set_selection(
         two_bodies, refs=[shape_ref(two_bodies, "a", "face", 1), shape_ref(two_bodies, "b", "face", 1)]
     )
-    set_visible(two_bodies, "a", False)
+    two_bodies.get_body("a").visible = False  # `set_visible` は項目を外すので、隠れた項目が残った状態を直接作る
 
     selection.toggle_selection(two_bodies, [{"body": "a", "kind": "face", "index": 1}])
     assert [(item["body"], item["index"]) for item in selection.get_selection(two_bodies).items] == [("b", 1)]

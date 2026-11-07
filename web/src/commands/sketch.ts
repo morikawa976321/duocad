@@ -35,6 +35,11 @@ function typed(values: ArgValues, name: string): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+/** 0 だけを断る寸法(負は逆向き)。もう一方の寸法を打っていない負は、2つの値を見る `build` が断る。 */
+function signedDimension(label: string): (value: number) => string | null {
+  return (value) => (value === 0 ? `${label}は0以外の値(負は逆向き)` : null)
+}
+
 /**
  * 線分。寸法は長さ・角度(度・反時計回り・スケッチ平面のX軸から。`add_arc` と同じ規約)。サーバへ送るのは `p0`/`p1` だけ。
  * 長さと角度を両方打てば終点は待たない(楕円と同じ。始点のクリックで確定する)。
@@ -43,6 +48,7 @@ export const ADD_LINE: CommandDef<'add_line'> = {
   id: 'add_line',
   label: '線分',
   buttonId: 'sketch-line',
+  title: '始点と終点を指して線分を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'p0', label: '始点' },
@@ -101,6 +107,7 @@ export const ADD_POINT: CommandDef<'add_point'> = {
   id: 'add_point',
   label: '点',
   buttonId: 'sketch-point',
+  title: '点を置く',
   preview: 'none',
   args: [{ kind: 'point', name: 'point', label: '位置' }],
   build(values) {
@@ -115,6 +122,7 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   id: 'add_circle',
   label: '円',
   buttonId: 'sketch-circle',
+  title: '中心と半径で円を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'center', label: '中心' },
@@ -155,6 +163,7 @@ export const ADD_ELLIPSE: CommandDef<'add_ellipse'> = {
   id: 'add_ellipse',
   label: '楕円',
   buttonId: 'sketch-ellipse',
+  title: '中心と大きさを決めて楕円を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'center', label: '中心' },
@@ -218,6 +227,7 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
   id: 'add_rectangle',
   label: '長方形',
   buttonId: 'sketch-rectangle',
+  title: '角と対角を指して長方形を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'corner', label: '1つ目の角' },
@@ -228,8 +238,9 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
       label: '幅',
       unit: 'mm',
       inputId: 'sketch-width',
-      reject: positive('幅'),
+      reject: signedDimension('幅'),
       fromPoints: true,
+      hint: '幅と高さを両方打つと、負の値で逆向きに伸ばせる',
     },
     {
       kind: 'number',
@@ -237,8 +248,9 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
       label: '高さ',
       unit: 'mm',
       inputId: 'sketch-height',
-      reject: positive('高さ'),
+      reject: signedDimension('高さ'),
       fromPoints: true,
+      hint: '幅と高さを両方打つと、負の値で逆向きに伸ばせる',
     },
   ],
   build(values) {
@@ -246,7 +258,15 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
     const opposite = values.opposite as Point2 | undefined
     if (!corner || !opposite) return { ok: false, reason: '角と対角の2点が要る' }
     const rect = rectFromPoints(corner, opposite, typed(values, 'width'), typed(values, 'height'))
-    if (rect === null) return { ok: false, reason: '幅と高さは0より大きい値' }
+    if (rect === null) {
+      const w = typed(values, 'width')
+      const h = typed(values, 'height')
+      const negativeAlone = (w === undefined || h === undefined) && ((w ?? 0) < 0 || (h ?? 0) < 0)
+      return {
+        ok: false,
+        reason: negativeAlone ? '負の値で逆向きにできるのは幅と高さを両方打ったとき' : '幅と高さは0より大きい値(両方打てば負は逆向き)',
+      }
+    }
     return { ok: true, args: { corner: rect.corner, width: rect.width, height: rect.height } }
   },
 }
@@ -256,6 +276,7 @@ export const ADD_ARC: CommandDef<'add_arc'> = {
   id: 'add_arc',
   label: '円弧',
   buttonId: 'sketch-arc',
+  title: '始点・終点・半径で円弧を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'p0', label: '始点' },
@@ -296,6 +317,7 @@ export const IMPORT_SVG: CommandDef<'import_svg'> = {
   id: 'import_svg',
   label: 'SVG読み込み',
   buttonId: 'sketch-import-svg',
+  title: 'SVGの図形をスケッチへ取り込む',
   preview: 'none',
   args: [
     {
@@ -322,6 +344,7 @@ export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   id: 'sketch_create',
   label: 'スケッチ',
   buttonId: 'sketch-create',
+  title: '平面か面を指してスケッチを始める',
   preview: 'none',
   // 引数名 `target` はWSに載る名前(`base_plane`)とわざと変えてある: 値は「基準平面名」か「面は選択にある」で、`base_plane` だと後者が嘘になる。
   args: [{ kind: 'plane', name: 'target', label: 'スケッチを貼る先' }],
@@ -340,6 +363,7 @@ export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
   id: 'sketch_create_offset',
   label: 'スケッチ(オフセット平面)',
   buttonId: 'sketch-create-offset',
+  title: '基準平面から離した平面にスケッチを始める',
   preview: 'none',
   args: [
     // 引数名 `target` は `SKETCH_CREATE` と同じ理由。
@@ -382,6 +406,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
   id: 'move_sketch_entities',
   label: '動かす',
   buttonId: 'sketch-move',
+  title: '点・辺を並進・回転で動かす',
   // 幽霊の対象は引数に無いので、`App.svelte` が同じ選択集合から導く(`ghostSources`)。
   preview: 'local',
   args: [
@@ -393,8 +418,8 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
       min: 1,
       max: null,
     },
-    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('sketch-move'), default: 'move' },
-    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('sketch-move'), default: 'translate' },
+    { kind: 'choice', name: 'copy', label: '元の図形', options: copyOptions('sketch-move'), default: 'move' },
+    { kind: 'choice', name: 'mode', label: '動かし方', options: modeOptions('sketch-move'), default: 'translate' },
     { kind: 'number', ...offsetArg('dx', 'sketch-move', () => null) },
     { kind: 'number', ...offsetArg('dy', 'sketch-move', () => null) },
     {
@@ -433,6 +458,7 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
   id: 'mirror_sketch_entities',
   label: '鏡映複製',
   buttonId: 'sketch-mirror',
+  title: '図形を線分を軸に鏡映して複製する',
   preview: 'server',
   args: [
     {
@@ -473,6 +499,7 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   id: 'envelope_regions',
   label: '包む',
   buttonId: 'sketch-envelope',
+  title: '選んだ領域を包む1つの領域線を足す',
   preview: 'server',
   args: [
     {
@@ -486,16 +513,18 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
     {
       kind: 'number',
       name: 'radius',
-      label: '追従半径 R',
+      label: '埋める半径',
+      hint: '幅が半径の2倍より狭い隙間とへこみを埋める',
       unit: 'mm',
       inputId: 'sketch-envelope-radius',
-      reject: (value) => (value < 0 ? '追従半径 R は 0 以上' : null),
+      reject: (value) => (value < 0 ? '埋める半径は 0 以上' : null),
       default: 0,
     },
     {
       kind: 'number',
       name: 'offset',
-      label: 'オフセット d',
+      label: '広げる量',
+      hint: '正で外へ・負で内へ動かす',
       unit: 'mm',
       inputId: 'sketch-envelope-offset',
       reject: () => null,
@@ -507,8 +536,8 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
     const radius = values.radius
     const offset = values.offset
     if (regions.length === 0) return { ok: false, reason: '領域が選ばれていない' }
-    if (typeof radius !== 'number') return { ok: false, reason: 'R が数値でない' }
-    if (typeof offset !== 'number') return { ok: false, reason: 'd が数値でない' }
+    if (typeof radius !== 'number') return { ok: false, reason: '埋める半径が数値でない' }
+    if (typeof offset !== 'number') return { ok: false, reason: '広げる量が数値でない' }
     return { ok: true, args: { radius, offset } }
   },
 }
@@ -522,6 +551,7 @@ export const PROJECT_TO_SKETCH: CommandDef<'project_to_sketch'> = {
   id: 'project_to_sketch',
   label: '投影',
   buttonId: 'sketch-project',
+  title: 'ボディの辺・面をスケッチ平面に投影する',
   preview: 'server',
   args: [
     {
@@ -549,6 +579,7 @@ export const PROJECT_OUTLINE: CommandDef<'project_outline'> = {
   id: 'project_outline',
   label: '外形を投影',
   buttonId: 'sketch-project-outline',
+  title: 'ボディの外形をスケッチ平面に投影する',
   preview: 'server',
   args: [
     {
@@ -580,6 +611,7 @@ export const SELECT_IN_SKETCH: CommandDef = {
   id: 'select_in_sketch',
   label: '選ぶ',
   buttonId: 'sketch-select',
+  title: '領域や図形をクリックして選ぶ',
   // 領域を直接クリックして選べるのでボタンは出さない。Escや確定後はここへ戻る。
   hidden: true,
   preview: 'none',

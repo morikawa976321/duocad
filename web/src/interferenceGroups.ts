@@ -75,6 +75,11 @@ function detailOf(pair: InterferencePair): string {
   }
 }
 
+/** 印の説明(マウスを載せたときの `title`)。説明が要る語だけ持つ。 */
+export const MARK_HINTS: Readonly<Record<string, string>> = {
+  上界: '縁の点で測った距離。実際の最短距離はこれ以下',
+}
+
 function marksOf(pair: InterferencePair): string[] {
   const marks: string[] = []
   if (pair.relation === 'tiny_overlap') marks.push('微小な重なり')

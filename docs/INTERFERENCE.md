@@ -153,7 +153,7 @@ MCP は区分を分けたまま返す）、本人が「微小な重なり」と�
 | short | 触れている（overlap / tiny_overlap / contact）、または最短距離 d < clearance − ε | 58（触れている 53 + 離れている 5） |
 | at | \|d − clearance\| ≤ ε（要求値と比較帯の中で一致。要求値で設計した組がここに入る） | 14 |
 | ok | d > clearance + ε（境界箱の段で離れている組を含む） | 279（測った 13 + 境界箱の段 266） |
-| null | 最短距離が測れなかった（理由を付ける）。relation は変えない | 0 |
+| null | 最短距離が測れなかった、または d が上界だけで「要求どおり」とも「足りている」とも言えない（at・ok にせず、理由を付けて一覧に残す。上界でも d < clearance − ε なら short）。relation は変えない | 0 |
 
 - **clearance は有限で 0 以上**（負・NaN・無限大は引数の検査で断る）。`0 < clearance ≤ ε` では、contact は short、GF が答えずに距離 0 の
   unknown も short になる。
@@ -280,7 +280,15 @@ hanger の文書（B-rep 12 体 + 形状最適化の結果のメッシュ 136,56
 
   **形全体で落ちたら、面の対ごとに測る。** 面の対を境界箱の距離の順に並べ、今の最小より遠い対は飛ばす。対で落ちたものだけ、片方の面の縁の
   点（頂点と辺の等分点）から相手の面へ測る（`kernel_shell._face_distance` と同じ考え）。縁の点からの値は真の最小以上で、同心の面なら一致する。
-  縁の点に頼った組は結果に印を付ける（「上界」）。0.19999997 は 0.2 との差 2.8e-8 で、ε（1e-6）の中なので at になる。
+  0.19999997 は 0.2 との差 2.8e-8 で、ε（1e-6）の中なので at になる。
+
+  **落ちた対は、相手の面を 1e-7 mm だけ動かして測り直す**（境界箱の中心まわりの回転と平行移動を半分ずつ。同心・同軸がずれて、
+  最短の組が有限個になる。平行移動だけでは同軸の円柱が平行な円柱になり、無数のまま）。動かして測った値は元の距離と動かした量
+  までしか違わないので、その値が最小 − 1e-7 以上なら、その対は最小を 2e-7 を超えて下回らない。落ちた対の全部でそう言えたときは
+  印を付けない。言えない対（動かしても測れない・最小を下回る）が残ったときだけ、結果に印を付ける（「上界」）。印の付いた距離は
+  真の最小を上から押さえているだけなので、足りない（short）とは判定しても、要求どおり（at）・足りている（ok）とは判定しない。
+  実測（2026-11-06）: 上の表の丸め 3（落ちる 8 対はどれも 2.2 で、最小より遠い）と丸め 2（落ちる 16 対のうち 8 対が最小と同じ 0.2）の
+  計 24 対は、動かす量 1e-6〜1e-9 のどれでも測れ、縁の点からの値との差は動かした量以内だった（1 対 1〜2 ミリ秒）。
 
 ## 返すもの
 
@@ -291,6 +299,7 @@ MCP（AI）へ（重い三角形は入れない）:
   "request_id": "...", "document_revision": 123, "units": "mm",
   "target": {"mode": "visible_all", "selected": [], "bodies": ["<body_id>", ...], "excluded_hidden": 0, "pairs": 351},
   "clearance": 0.2, "method": "gf2+distance", "seconds": 8.7, "complete": true, "not_started": 0,
+  "child_restarts": 0, "timeouts": [],
   "thresholds": {"thickness_mm": 0.001, "gap_band_mm": 1e-6},
   "counts": {"overlap": 2, "tiny_overlap": 20, "contact": 31, "separated": 298, "unknown": 0,
              "short": 58, "at": 14, "ok": 279, "clearance_null": 0},
@@ -306,6 +315,7 @@ MCP（AI）へ（重い三角形は入れない）:
 ```
 
 - `counts` は対象の全組（境界箱の段で離れていると分かった組を含む）を母数にする。
+- `child_restarts` は子を立て直した回数、`timeouts` は期限切れになった組と段（`phase` は `relation` か `distance`）。
 - 測れなかった値は `null` と理由。0 で埋めない。`separated` で `clearance` が ok（または問われていない）組は `pairs` に入れない（件数だけ）。
   接触・微小重なり・unknown は省かない。
 - 画面へは同じ内容に、描画用の三角形（画面の分割の細かさ）を足して、要求した接続にだけ返す: overlap と tiny_overlap の重なりの立体、
@@ -399,9 +409,9 @@ astra の意見（要旨）と AI の採否:
 
 ## 実装計画
 
-1. **カーネル**: `duocad/kernel_interference.py` を足す（OCP を import してよい一覧 `tests/test_boundaries.py` に加える。`kernel.py` は
-   1,682 行で、足さない）。`pair_relation(a, b) -> dict`（2体 GF・非破壊・像の共有・重なりの体積と厚さと有向箱・接触の種類と面積・警告の
-   名前）、`min_distance(a, b) -> dict`（`SetMultiThread(True)`。形全体で落ちたら面の対ごと、対で落ちたら縁の点から。どの段で測ったかを返す）、`loose_bbox(shape)`、`overlap_triangles(pieces, deviation)`。
+1. **カーネル**: `duocad/kernel_interference.py` を足す（OCP を import してよい一覧 `tests/test_boundaries.py` に加える。`kernel.py` には
+   足さない）。`pair_relation(a, b) -> dict`（2体 GF・非破壊・像の共有・重なりの体積と厚さと有向箱・接触の種類と面積・警告の
+   名前）、`min_distance(a, b) -> dict`（`SetMultiThread(True)`。形全体で落ちたら面の対ごと、対で落ちたら縁の点から。どの段で測ったかを返す）、`overlap_measures(pieces)`、`triangles(shape, deviation)`、`box_gap`。ゆるい境界箱は `brep_geometry._interference_loose_bbox`。
    `BOPAlgo_BOP.PDS()` / `PPaveFiller().DS()` に触らないことをコメントに書く。
 2. **メッシュ**: `duocad/interference_mesh.py`（manifold3d。OCP なし）。B-rep の0.01 mm分割は `topopt.finalize.tessellate_body` を使う。
 3. **組み立て**: `duocad/interference.py`（OCP なし）。開始時に「文書の版・対象のボディ ID・可視性・選択・形の写し」を1つのスナップショットに
@@ -446,7 +456,9 @@ astra の意見（要旨）と AI の採否:
 - 第三のボディが重なりを横切っても、2体の結果（体積・厚さ）が変わらない。
 - 200×200 の薄い一致面と深いピンがつながった形が tiny_overlap にならない（2V/A は 0.00039、有向境界箱で overlap）。
 - 境界箱の距離が clearance と clearance + ε の間の組が at になる（候補の幅の確認）。
-- 角を丸めた箱に丸めを同心にした中子を隙間 0.2 で入れた組で、最短距離が例外で落ちずに 0.2（at）と出て、縁の点に頼った印が付く。
+- 角を丸めた箱に丸めを同心にした中子を隙間 0.2 で入れた組で、最短距離が例外で落ちずに 0.2（at）と出て、上界の印が付かない
+  （丸め 3 と 2。落ちた対を動かして測り直す）。動かしても測れない対・最小を下回る対が残ると、上界の印が付く。
+- 上界の印の付いた距離は、要求との差が ε の中でも、要求より大きくても、at・ok にならない（null）。
 - 半径 30 のピンと穴の隙間 0.1（位相をずらす）を 0.1 と測る（メッシュ経路の誤りを B-rep で再現しない確認）。
 - 共有の判定: 同じ hash を返す別の形状の束（偽の形の型で作る単体テスト）を取り落とさず、取り違えもしない。
 - 知らない種類・面積 0 は relation が unknown と理由に、距離の失敗は clearance が null と理由になり、separated や 0 にならない。GF が
@@ -479,7 +491,7 @@ OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・
 
 | 段 | モジュール | 中身 |
 |---|---|---|
-| カーネル | `duocad/kernel_interference.py`（OCP） | `pair_relation`（2体 GF・非破壊・像の共有・領域ごとの 2V/A と有向箱・重心と箱・描画用の三角形/折れ線/点）、`min_distance`（形全体 → 面の対ごと → 縁の点）、`loose_bbox` |
+| カーネル | `duocad/kernel_interference.py`（OCP） | `pair_relation`（2体 GF・非破壊・像の共有・領域ごとの 2V/A と有向箱・重心と箱・描画用の三角形/折れ線/点）、`min_distance`（形全体 → 面の対ごと → 縁の点）、`overlap_measures`・`triangles(shape, deviation)`・`box_gap`（境界箱の間の距離。箱そのものは `brep_geometry._interference_loose_bbox`） |
 | メッシュ | `duocad/interference_mesh.py`（manifold3d） | `mesh_pair`: 交差の体積が正（小さい方の体積の 1e-9 倍超）なら重なり、連成分ごとに 2V/A と頂点の主成分箱の最小辺を測り、最も厚い成分を返す。体積 0 なら `min_gap`（探索幅 `max(1, 2·(clearance+ε))`）が ε 以下で接触、より大きければ離れている（探索幅で頭打ちなら `distance_lower_bound`） |
 | 組み立て | `duocad/interference.py`（OCP なし） | 引数の検査・対象の決め方（`resolve_targets`）・スナップショット・分類（`classify_relation` / `classify_clearance`）・実行（`run`）・結果 |
 | 子プロセス | `duocad/interference_worker.py` | 親側の `WorkerProcess`（共通の `duocad/worker_process.py` に `load` を載せたもの。JSON 行の線・上限つきの待ち・取り消しは共通の側）と子の本体（`python -m duocad.interference_worker`）。同じ口の `InProcessWorker`（軽い形の試験用） |
@@ -509,7 +521,7 @@ OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・
 
 - 合成（箱・円柱・丸めた箱を 10 mm 格子に 10.2 mm 幅で隣と重ねた形）で、子プロセス込みの全体: 30 体（435 組・関係を測る組 90）= 3.4 秒（clearance 0）/ 4.1 秒（0.2）、100 体（4,950 組・関係を測る組 365）= 9.2 / 11.5 秒。
   組あたりの関係の計算は 20 ms 前後（試作の「1組 1.0〜44.5 ms」の範囲）で、子の起動と読み込みが約 1.2 秒。PC ケースでの時間は下の「手元での確認」。
-- **形全体の最短距離が落ちるかどうかは、同じ形でも表現で変わる**: 角を丸めた箱に同心の中子（隙間 0.2）は、組み立てた形(と `copy_shape` の写し)では `StdFail_NotDone` で面の対ごとに落ちる（上界の印が付く）が、BRep の文字列を経由して読み直した形（子の中の形）では形全体で測れて 0.1999999718 が出る。
+- **形全体の最短距離が落ちるかどうかは、同じ形でも表現で変わる**: 角を丸めた箱に同心の中子（隙間 0.2）は、組み立てた形(と `copy_shape` の写し)では `StdFail_NotDone` で面の対ごとに落ちる（落ちた対を動かして測り直すので、上界の印は付かない）が、BRep の文字列を経由して読み直した形（子の中の形）では形全体で測れて 0.1999999718 が出る。
   どちらでも `at` になるので判定は変わらない（`tests/test_interference.py` は段を決め打ちせず値と区分だけ見る。段の落ち方は `tests/test_interference_kernel.py` が組み立てた形そのもので固定）。
 
 ### 手元での確認（2026-10-22、Windows）

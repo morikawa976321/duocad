@@ -79,4 +79,23 @@ function lookingAtOrigin(aspect) {
   assert.equal(moved.count, settled, '何も変わらないのに「動いた」と見ている')
 }
 
+// 文書の切り替え(reapply)の後は、見え方が同じでももう一度知らせる(サーバは切り替えで目標を捨てる)。
+{
+  const camera = lookingAtOrigin(1.6)
+  const { tracker } = makeTracker(camera)
+  let sent = 0
+  tracker.onChange(() => (sent += 1))
+  let now = 0
+  tracker.update(now)
+  tracker.update((now += 1000))
+  assert.equal(sent, 1, '最初の落ち着きで1回知らせる')
+  tracker.update((now += 1000))
+  assert.equal(sent, 1, '同じ見え方を重ねて知らせない')
+  tracker.reapply()
+  tracker.update((now += 16))
+  assert.equal(sent, 2, 'reapply の後は同じ見え方でも知らせる')
+  tracker.update((now += 1000))
+  assert.equal(sent, 2, '知らせた後は重ねない')
+}
+
 console.log('resolutionTracker.ts: 全ての想定を満たした')

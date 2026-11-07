@@ -19,7 +19,7 @@ from typing import Sequence, Union
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
 from ..entry import entry
-from ._common import blend_edges, edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, undo_shape
+from ._common import blend_edges, edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, require_blend_minimum, undo_shape
 
 VERB_FILLET = "fillet"
 
@@ -36,6 +36,7 @@ def fillet(
 
     body = editable_body(doc, body_id, what="fillet")
     values, stored_radius = normalize_values(edge_list, radius, label="radius")
+    require_blend_minimum(values, label="radius")
     result = blend_edges(body.shape, dict(zip(edge_list, values)), verb=VERB_FILLET)
 
     previous_shape = body.shape

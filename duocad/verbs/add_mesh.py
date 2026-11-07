@@ -18,6 +18,7 @@ from ..document import Body, BodyId, Document, MESH_KIND, make_mesh, new_body_id
 from .. import naming
 from ..oplog import Operation, register_verb
 from ..entry import entry
+from .rename import check_name
 
 VERB_ADD_MESH_BODY = "add_mesh_body"
 
@@ -28,12 +29,15 @@ def add_mesh_body(
     indices: Sequence[int],
     name: Optional[str] = None,
 ) -> BodyId:
-    """三角形メッシュのボディを足して、そのIDを返す。`name` を省くと通し番号の名前。
+    """三角形メッシュのボディを足して、そのIDを返す。`name` を省くと通し番号の名前。渡した名前は `rename` と同じ検査
+    (空・前後の空白・制御文字は ValueError。同じ名前が並ぶのは許す)。
 
     `positions` は x,y,z を平らに並べた頂点座標[mm]、`indices` は**0始まり**の頂点添字を
     3つずつ並べた三角形。検査に落ちたら文書もログも変えない。
     """
     mesh = make_mesh(positions, indices)
+    if name is not None:
+        check_name(name)
     body_id = new_body_id()
     numbered: dict = {}
     if name is None:
@@ -41,7 +45,7 @@ def add_mesh_body(
         body_name = naming.label(naming.BODY, number)
         numbered = {"number": number}
     else:
-        body_name = str(name)
+        body_name = name
     _apply(document, body_id, body_name, mesh)
     document.log.append(
         VERB_ADD_MESH_BODY,

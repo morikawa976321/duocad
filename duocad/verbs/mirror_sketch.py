@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
 from .. import datum, parameters, region
 from ..document import Document
@@ -79,9 +79,21 @@ def _axis_line(doc: Document, axis: Any) -> tuple:
 
 
 def _mirrored_plan(
-    doc: Document, normalized: Sequence[tuple], ax: float, ay: float, ux: float, uy: float, *, fresh: bool
+    doc: Document,
+    normalized: Sequence[tuple],
+    ax: float,
+    ay: float,
+    ux: float,
+    uy: float,
+    *,
+    fresh: bool,
+    skipped: Optional[List[tuple]] = None,
 ) -> List[tuple]:
-    """検査してから返す計画 `[(sketch, kind, values), ...]`(対象と同じ順序。書き込みより前に全部検査する)。"""
+    """検査してから返す計画 `[(sketch, kind, values), ...]`(対象と同じ順序。書き込みより前に全部検査する)。
+
+    `skipped` を渡すと、軸の上に乗って鏡映できない対象は断らずに `(sketch_id, entity_id)` をそこへ積み、計画から除く
+    (新しい操作の入口だけが渡す。redo / 再生は渡さず、記録された対象をそのまま掛ける)。
+    """
     planned: List[tuple] = []
     for sketch_id, entity_id in normalized:
         sketch = get_sketch(doc, sketch_id)
@@ -91,6 +103,9 @@ def _mirrored_plan(
         values.update(entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy))
         if overlaps_original(entity.kind, values, current, fresh=fresh):
             # 対象が軸の上に乗っている。元と重なる複製は作らない(領域検出が同じ辺を2本見る)。
+            if skipped is not None:
+                skipped.append((sketch_id, entity_id))
+                continue
             raise ValueError(
                 f"mirror_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
                 "(対象が鏡映軸の上に乗っている)"
@@ -148,9 +163,22 @@ def _prepared(doc: Document, targets: Sequence[dict], axis: Any) -> tuple:
     return normalized, ax, ay, ux, uy
 
 
+def _without_unmirrorable(
+    doc: Document, normalized: Sequence[tuple], ax: float, ay: float, ux: float, uy: float
+) -> tuple:
+    """軸の上に乗って鏡映できない対象を外した `(残る対象, 外した数)`。全部が外れるときは断る(その理由を投げる)。"""
+    skipped: List[tuple] = []
+    _mirrored_plan(doc, normalized, ax, ay, ux, uy, fresh=True, skipped=skipped)
+    kept = [item for item in normalized if item not in skipped]
+    if not kept:
+        _mirrored_plan(doc, normalized, ax, ay, ux, uy, fresh=True)
+    return kept, len(skipped)
+
+
 def mirrored_entities(doc: Document, targets: Sequence[dict], axis: Any) -> List[tuple]:
     """確定したら足される複製 `[(sketch_id, kind, values), ...]`。文書を変えない(プレビュー用)。"""
     normalized, ax, ay, ux, uy = _prepared(doc, targets, axis)
+    normalized, _ = _without_unmirrorable(doc, normalized, ax, ay, ux, uy)
     plan = _mirrored_plan(doc, normalized, ax, ay, ux, uy, fresh=True)
     return [(sketch_id, kind, values) for (sketch_id, _), (_, kind, values) in zip(normalized, plan)]
 
@@ -158,14 +186,20 @@ def mirrored_entities(doc: Document, targets: Sequence[dict], axis: Any) -> List
 def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) -> Operation:
     """選択のスケッチ図形を、既存の線分 `axis`(またはスケッチ平面の上にある原点の軸)を軸に鏡映複製する(常に複製)。
 
-    軸自身が対象に混ざっていてもよく、軸に使った図形は対象から黙って外す。失敗したときは
-    文書にもログにも何も残さない。
+    軸自身が対象に混ざっていてもよく、軸に使った図形は対象から黙って外す。軸の上に乗って鏡映できない図形も外して続け
+    (全部が外れたときだけ断る)、ログの `targets` には残した図形だけを載せる。失敗したときは文書にもログにも何も残さない。
     """
+    return _mirror(doc, targets, axis)[0]
+
+
+def _mirror(doc: Document, targets: Sequence[dict], axis: Any) -> tuple:
+    """`mirror_sketch_entities` の本体。`(操作, 軸の上にあって外した図形の数)` を返す。"""
     normalized, ax, ay, ux, uy = _prepared(doc, targets, axis)
+    normalized, skipped = _without_unmirrorable(doc, normalized, ax, ay, ux, uy)
     new_ids = [new_entity_id() for _ in normalized]
     created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids, fresh=True)
 
-    return doc.log.append(
+    operation = doc.log.append(
         VERB_MIRROR_SKETCH_ENTITIES,
         {
             "targets": [{"sketch": s, "entity": e} for s, e in normalized],
@@ -174,6 +208,7 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
             "created": created,
         },
     )
+    return operation, skipped
 
 
 def _do_mirror_sketch_entities(document: Document, operation: Operation) -> None:
@@ -204,10 +239,14 @@ register_verb(
 def _enter_mirror_sketch_entities(document: Document, axis: Any) -> dict:
     targets = selection.require_sketch_entities(document)
     sketch_ids = sorted({str(item["sketch"]) for item in targets})
-    args = mirror_sketch_entities(document, targets, axis).args
-    return {
+    operation, skipped = _mirror(document, targets, axis)
+    args = operation.args
+    out = {
         "axis_p0": args["axis_p0"],
         "axis_dir": args["axis_dir"],
         "created": list(args["created"]),
         "sketch_ids": sketch_ids,
     }
+    if skipped:
+        out["warning"] = f"鏡映軸の上に乗っている図形 {skipped} 個は、鏡映できないので外した"  # `Session._after_logged_verb` が警告のトーストへ積む
+    return out

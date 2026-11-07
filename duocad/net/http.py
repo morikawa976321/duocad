@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import wire
+from .uploads import UPLOAD_HTTP_PATH, UPLOAD_MAX_BYTES, UploadStore, post_upload
 
 #: MCPのHTTPトランスポートの口。ブラウザが開くページと同じポートに生やす。
 MCP_HTTP_PATH = "/mcp"
@@ -41,13 +42,17 @@ class WebHandler(SimpleHTTPRequestHandler):
     mcp_hosts: frozenset = frozenset()
     #: `/api/update` を答える `StableUpdater`(`duocad/channel.py`)。開発版では None で、口は 404。
     updater: Any = None
-    #: `/api/update` へのPOSTで許す `Origin`(= duocad自身が配るページ)。
+    #: ページ専用のPOSTで許す `Origin`(= duocad自身が配るページ)。
     page_origins: frozenset = frozenset()
+    upload_store: UploadStore
     #: `McpServer` の状態を2スレッドで同時に触らせない(`ThreadingHTTPServer` は接続ごとにスレッド)。
     mcp_lock = threading.Lock()
 
     def do_POST(self) -> None:  # noqa: N802  (BaseHTTPRequestHandlerの命名に従う)
-        """MCPのHTTPトランスポートと、安定版の更新の開始。POSTの口はこの2つだけ。"""
+        """ファイル本文のアップロード・更新・MCP の3つの POST を振り分ける。"""
+        if self.path.split("?", 1)[0] == UPLOAD_HTTP_PATH:
+            post_upload(self)
+            return
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -176,6 +181,13 @@ class WebHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def end_headers(self) -> None:
+        # ビルドの出力(assets/)は名前に内容のハッシュが入る。入口の index.html だけが同じ名前のまま
+        # 中身が変わるので、毎回サーバへ確かめさせる(古い index.html が消えた assets を指すと白い画面になる)。
+        if self.command in ("GET", "HEAD") and self.path.split("?")[0] in ("/", "/index.html"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def log_message(self, *args: Any) -> None:
         """アクセスログを出さない(計測中のコンソールを静かに保つ)。"""
 
@@ -195,6 +207,17 @@ class _ExclusiveHTTPServer(ThreadingHTTPServer):
     """
 
     allow_reuse_address = os.name != "nt"
+    upload_store: Optional[UploadStore] = None
+
+    def shutdown(self) -> None:
+        super().shutdown()
+        if self.upload_store is not None:
+            self.upload_store.close()
+
+    def server_close(self) -> None:
+        super().server_close()
+        if self.upload_store is not None:
+            self.upload_store.close()
 
 
 def start_http_server(
@@ -218,13 +241,26 @@ def start_http_server(
             f"{dist_dir} に index.html が無い。先に web をビルドすること:\n"
             f"    cd {dist_dir.parent}\n    npm install\n    npm run build"
         )
-    WebHandler.config_payload = json.dumps({"ws_url": ws_url, **(config or {})}).encode("utf-8")
-    WebHandler.updater = updater
-    WebHandler.page_origins = frozenset(f"http://{host}:{port}" for host in ("127.0.0.1", "localhost"))
-    WebHandler.mcp_server = mcp
-    WebHandler.mcp_hosts = mcp_http_hosts(port)
-    handler = partial(WebHandler, directory=str(dist_dir))
+    class Handler(WebHandler):
+        pass
+
+    handler = partial(Handler, directory=str(dist_dir))
     httpd = _ExclusiveHTTPServer(("127.0.0.1", port), handler)
+    try:
+        httpd.upload_store = UploadStore()
+    except OSError:
+        httpd.server_close()
+        raise
+    Handler.upload_store = httpd.upload_store
+    Handler.config_payload = json.dumps({
+        "ws_url": ws_url, **(config or {}), "upload_max_bytes": UPLOAD_MAX_BYTES,
+    }).encode("utf-8")
+    Handler.updater = updater
+    bound_port = httpd.server_address[1]
+    Handler.page_origins = frozenset(f"http://{host}:{bound_port}" for host in ("127.0.0.1", "localhost"))
+    Handler.mcp_server = mcp
+    Handler.mcp_hosts = mcp_http_hosts(bound_port)
+    Handler.mcp_lock = threading.Lock()
     thread = threading.Thread(target=httpd.serve_forever, name="duocad-http", daemon=True)
     thread.start()
     return httpd

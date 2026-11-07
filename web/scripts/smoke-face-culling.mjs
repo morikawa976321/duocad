@@ -31,8 +31,8 @@ const STABLE_MS = 1000
 runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options, mcp, browser, url, timeout }) => {
   const stepPath = options.step ?? PC_CASE_STEP
   const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
-  /** 深いズームの段数(ホイールの刻み)。engineの実測(30段)に合わせてある。 */
-  const ZOOM_STEPS = Number.parseInt(options['zoom-steps'] ?? '30', 10)
+  /** 比較対象の実測は zoomSpeed=1 で30段。既定は同じ倍率まで寄せる。 */
+  const ZOOM_STEPS = Number.parseInt(options['zoom-steps'] ?? '15', 10)
   if (!existsSync(stepPath)) fail(`STEPが無い: ${stepPath}`)
   console.log(`smoke-face-culling: ${stepPath}`)
   {

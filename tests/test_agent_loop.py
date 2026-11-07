@@ -543,6 +543,79 @@ def test_a_name_or_a_kanji_word_that_is_not_a_quantity_still_stops_the_guess(pro
     assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
 
 
+def test_a_digit_in_a_body_name_is_not_taken_for_a_quantity(box_session: Session):
+    """落ちたら、「治具2」「ボディ2」のように名前に数字のあるボディを指しただけで、モデルが埋めた寸法がガードを素通りする。"""
+    box_session.document.get_body("box").name = "治具2"
+    provider = RecordedProvider([tool_use("fillet", {"radius": 2}, "c0"), spoke("やめた")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run("治具2の角をいい感じに丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
+
+
+def test_a_quantity_beside_a_body_name_with_a_digit_still_passes(box_session: Session):
+    """落ちたら、名前の数字を除くとき量の数字まで消えて、「治具2の角をR3で」が止まる。"""
+    box_session.document.get_body("box").name = "治具2"
+    provider = RecordedProvider([tool_use("fillet", {"radius": 3}, "c0"), spoke("done")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run("治具2の角をR3で丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
+@pytest.mark.parametrize("name", ["R3", "t3", "3mm", "3.0", "Ｒ３"])
+def test_a_quantity_spelled_like_the_name_of_another_shape_still_passes(box_session: Session, name: str):
+    """落ちたら、寸法の書き方と同じ綴りの名前(`R3`)の図形が文書にあるだけで、「R3で丸めて」が量なしと読まれて止まる。"""
+    from duocad.sketch import get_sketch
+
+    sketch_id = box_session.sketch_create("XY")["sketch_id"]
+    get_sketch(box_session.document, sketch_id).name = name
+    provider = RecordedProvider([tool_use("fillet", {"radius": 3}, "c0"), spoke("done")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run(f"箱の辺を{name}で丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
+@pytest.mark.parametrize("name", ["R3", "A1", "10mm"])
+def test_a_name_spelled_like_a_quantity_does_not_pass_a_value_nobody_gave(box_session: Session, name: str):
+    """落ちたら、`R3` `A1` のような名前の図形を指しただけで、モデルが埋めた別の値の寸法がガードを素通りする。"""
+    box_session.document.get_body("box").name = name
+    provider = RecordedProvider([tool_use("fillet", {"radius": 2}, "c0"), spoke("やめた")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run(f"{name}の角をいい感じに丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        ("fillet", {"radius": 10**400}),
+        ("begin_command", {"verb": "fillet", "args": {"radius": 10**400}}),
+        ("fillet", {"radius": [3, 10**400]}),
+    ],
+    ids=["verb", "staged", "nested"],
+)
+def test_a_value_too_large_for_a_float_is_answered_not_raised(box_session: Session, call: tuple[str, dict]):
+    """落ちたら、モデルが float に収まらない整数を寸法に入れたとき、ガードが例外を漏らして AI の応答が途中で終わる。"""
+    provider = RecordedProvider([tool_use(*call, "c0"), spoke("やめた")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run("箱の辺をR3で丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) == "invalid_argument"
+
+
+@pytest.mark.parametrize("prompt", ["半径を倍にして", "穴を半分の大きさにして"])
+def test_a_ratio_is_a_quantity_the_person_gave(prompt: str):
+    """落ちたら、比率で頼んだ依頼(「倍に」「半分に」)が量なしと読まれ、聞き返しで1往復無駄になる。"""
+    provider = RecordedProvider([tool_use("fillet", {"radius": 3}, "c0"), spoke("done")])
+
+    run = AgentLoop(tools(), provider).run(prompt)
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
 @pytest.mark.parametrize("unit", ["a", "a-", "一", "a_1"])
 def test_the_quantity_check_takes_time_in_proportion_to_the_length(unit: str):
     """落ちたら、貼り付けた長い英数字の連続(base64・16進ダンプ)が、寸法付きツールを呼ぶたびに数秒の二乗時間を食う

@@ -6,13 +6,16 @@
    * - プロバイダの選択は `status.providers` で駆動する(2つ以上のときだけ選択UIを出す)。
    * - 会話の時系列(`transcript`)の正は `aiChat.svelte.ts`。サーバ側の会話(`duocad/agent/loop.py`)が残らないための代わりにブラウザ側が持つ
    *   (`session.ts` の `AiTranscriptEntry` 参照)。打ちかけの依頼文(`draft`)も親が持つ(右サイドバーを閉じるとこのパネルごと消える)。
-   *   ここが持つのは見た目だけの状態(設定フォームの開閉と打ちかけ・`open`)で、閉じると消える。
-   * - ツール呼び出しの表示は verb 名をそのまま出す(操作ログ・MCPツール名と同じ綴り)。
+   *   ここが持つのは見た目だけの状態(設定フォームの開閉と打ちかけ)で、閉じると消える。パネル本体を出しているか(`open`)は親が持つ
+   *   (畳んでいる間は会話欄が見えないので、AI の失敗を札で出すかの判断に要る。`aiChat.svelte.ts` の `hidden`)。
+   * - ツール呼び出しの表示は画面のコマンドのラベルと主な引数(`aiToolLine.ts`)。対応するコマンドの無い verb は verb 名のまま。元の verb 名と引数の JSON はツールチップ。
    *
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
-   * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
+   * 既定は開いている(再読込をまたいで保持しない)。「接続先」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
-  import { inputBlockedReason, resultDetail, resultLine, toolFailureReason } from './aiResult'
+  import { inputBlockedReason, resultDetail, resultLine, toolFailureReason, usageLine } from './aiResult'
+  import { toolLine, toolRawLine } from './aiToolLine'
+  import type { CommandDef } from './commands/command'
   import { isImeKey } from './keys'
   import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry, ConnectionStatus } from './session'
 
@@ -20,7 +23,9 @@
     status,
     connection,
     transcript,
+    commandOf,
     draft = $bindable(),
+    open = $bindable(),
     onSend,
     onCancel,
     onConfigure,
@@ -30,7 +35,11 @@
     /** サーバとのWebSocketの状態。`status`(`ai_status`)は切断後も残るので、繋がっているかはこちらで見る。 */
     connection: ConnectionStatus
     transcript: AiTranscriptEntry[]
+    /** verb 名から画面のコマンド定義を引く(ツール行をコマンドのラベルと引数の見出しで書くため)。 */
+    commandOf: (verb: string) => CommandDef | undefined
     draft: string
+    /** パネル本体(会話・入力・設定)を出しているか。畳んでもヘッダ行(プロバイダ名・中断・設定)は「何が繋がっているか」「応答中か」を言う役目なので見せたままにする。 */
+    open: boolean
     onSend: (message: string) => void
     onCancel: () => void
     onConfigure: (provider: AiProviderKind, baseUrl?: string) => void
@@ -38,13 +47,12 @@
   } = $props()
 
   let settingsOpen = $state(false)
-  /** パネル本体(会話・入力・設定)を出しているか。畳んでもヘッダ行(プロバイダ名・中断・設定)は「何が繋がっているか」「応答中か」を言う役目なので見せたままにする。 */
-  let open = $state(true)
   let providerDraft = $state<AiProviderKind>('openai_compat')
   let baseUrlDraft = $state('')
 
   const running = $derived(status?.running ?? false)
-  const blockedReason = $derived(inputBlockedReason(connection, status !== null))
+  const keyMissing = $derived(status?.provider === 'anthropic' && !status.apiKeyConfigured)
+  const blockedReason = $derived(inputBlockedReason(connection, status !== null, keyMissing))
   const canPickProvider = $derived((status?.providers?.length ?? 0) > 1)
 
   const PROVIDER_LABEL: Record<string, string> = {
@@ -66,7 +74,6 @@
   const canPickEndpoint = $derived(providerDraft !== 'anthropic')
   /** Claudeしか選べない版(安定版。`Server.ai_providers`)では設定フォームに出すものが無いので、開く口ごと出さない。 */
   const hasSettings = $derived(canPickProvider || status?.provider !== 'anthropic')
-  const keyMissing = $derived(status?.provider === 'anthropic' && !status.apiKeyConfigured)
 
   function openSettings(): void {
     providerDraft = status?.provider ?? 'openai_compat'
@@ -92,6 +99,9 @@
   }
 
   let messageInput: HTMLInputElement | undefined = $state()
+  export function focusInput(): void {
+    if (messageInput && !messageInput.disabled) messageInput.focus()
+  }
   let transcriptBox: HTMLDivElement | undefined = $state()
 
   function send(): void {
@@ -121,27 +131,6 @@
     if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight
   })
 
-  /** 引数・結果はJSONで畳んでおく(§長い応答対策)。 */
-  function toolLine(call: AiTranscriptEntry & { kind: 'tool' }): string {
-    const args = Object.keys(call.call.arguments).length ? JSON.stringify(call.call.arguments) : ''
-    return `${call.call.name}${args ? ` ${args}` : ''}`
-  }
-
-  /** llama-server の `timings` を往復ぶん足した値。Claudeは時間ではなくトークン数(課金の単位)を出す。どちらも返さないサーバでは空文字(行ごと出さない)。 */
-  function usageLine(usage: Record<string, number> | undefined): string {
-    if (usage?.input_tokens !== undefined && usage.output_tokens !== undefined) {
-      return (
-        `入力 ${usage.input_tokens}(キャッシュ読み ${usage.cache_read_input_tokens ?? 0}` +
-        `・書き ${usage.cache_creation_input_tokens ?? 0})／ 出力 ${usage.output_tokens} トークン`
-      )
-    }
-    if (usage?.prompt_n === undefined || usage.predicted_n === undefined) return ''
-    const seconds = (ms: number | undefined): string => ((ms ?? 0) / 1000).toFixed(1)
-    return (
-      `読み ${usage.prompt_n}(再利用 ${usage.cache_n ?? 0})トークン ${seconds(usage.prompt_ms)}秒` +
-      ` ／ 書き ${usage.predicted_n} トークン ${seconds(usage.predicted_ms)}秒`
-    )
-  }
 </script>
 
 <section class="ai-panel" class:collapsed={!open}>
@@ -187,7 +176,7 @@
     {/if}
     {#if hasSettings}
       <button id="ai-settings-toggle" onclick={() => (settingsOpen ? (settingsOpen = false) : openSettings())}>
-        設定
+        接続先
       </button>
     {/if}
   </div>
@@ -230,19 +219,14 @@
     {#if blockedReason}
       <p class="hint dim">{blockedReason}</p>
     {/if}
-    {#if keyMissing}
-      <p class="hint dim">
-        APIキーが未設定(ヘッダーの「設定」から置ける)
-      </p>
-    {/if}
 
     <div class="ai-transcript" id="ai-transcript" bind:this={transcriptBox}>
       {#each transcript as entry, index (index)}
         {#if entry.kind === 'user'}
           <p class="line user">{entry.text}</p>
         {:else if entry.kind === 'tool'}
-          <p class="line tool" class:tool-fail={!entry.call.ok}>
-            {entry.call.ok ? '✓' : '✗'} {toolLine(entry)}
+          <p class="line tool" class:tool-fail={!entry.call.ok} title={toolRawLine(entry.call)}>
+            {entry.call.ok ? '✓' : '✗'} {toolLine(entry.call, commandOf)}
           </p>
           {#if !entry.call.ok && toolFailureReason(entry.call.result)}
             <p class="tool-reason" data-ai-tool-reason>{toolFailureReason(entry.call.result)}</p>

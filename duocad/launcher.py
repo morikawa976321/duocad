@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -33,22 +34,30 @@ DEFAULT_DATA_DIR = Path.home() / "mf" / "duocad-stable" / "data"
 #: サーバが応答するまで待つ上限(秒)。OCCTの読み込みで初回は十数秒かかる。
 START_TIMEOUT_SECONDS = 120.0
 
+#: 窓を開いた後、`find_app_window` が窓のタイトルを拾えるまで待つ上限(秒)。続けて起動した2つ目の
+#: 起動口は、1つ目が手放した後にこの窓を探すので、窓が見えるまで手放さない。
+WINDOW_APPEAR_SECONDS = 20.0
+
 #: サーバのログ(`<data>/logs/server.log`)をこの大きさで1世代だけ回す。
 LOG_ROTATE_BYTES = 5 * 1024 * 1024
+
+#: 起動失敗のダイアログに入れるログ末尾の行数。
+LOG_TAIL_LINES = 8
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
 def server_config(http_port: int) -> Optional[dict]:
-    """立っているサーバの `/duocad-config.json`。応答が無ければ None。"""
+    """立っているサーバの `/duocad-config.json`。応答が無い・別のサービスの応答なら None。"""
+    # ProxyHandler({}): Windows のシステムプロキシ設定を通さず、自分のマシンへ直に繋ぐ。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{http_port}/duocad-config.json", timeout=1.0
-        ) as response:
-            return json.loads(response.read().decode("utf-8"))
+        with opener.open(f"http://127.0.0.1:{http_port}/duocad-config.json", timeout=1.0) as response:
+            config = json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError):
         return None
+    return config if isinstance(config, dict) else None
 
 
 def _python_without_console() -> str:
@@ -68,7 +77,7 @@ def _open_log(log_dir: Path):
     return open(log, "ab")
 
 
-def spawn_server(channel: str, port: int, http_port: int, data_dir: Path) -> None:
+def spawn_server(channel: str, port: int, http_port: int, data_dir: Path) -> subprocess.Popen:
     command = [
         _python_without_console(), "-m", "duocad.mcp_server",
         "--channel", channel,
@@ -81,12 +90,14 @@ def spawn_server(channel: str, port: int, http_port: int, data_dir: Path) -> Non
     try:
         log.write(f"\n==== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(command)}\n".encode("utf-8"))
         log.flush()
-        subprocess.Popen(
+        return subprocess.Popen(
             command,
             cwd=str(REPO_ROOT),
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
+            # 日本語 Windows の既定は cp932。見出し行(UTF-8)と同じ文字コードでログに残す。
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             creationflags=_NO_WINDOW | _NEW_GROUP,
             close_fds=True,
         )
@@ -94,13 +105,42 @@ def spawn_server(channel: str, port: int, http_port: int, data_dir: Path) -> Non
         log.close()
 
 
-def wait_for_server(http_port: int) -> bool:
+def wait_for_server(http_port: int, process: Optional[subprocess.Popen] = None) -> bool:
+    """サーバが応答するまで待つ。`process` が先に終わったら、待たずに False を返す。
+
+    ただし二重起動の2つ目の子は正当に即死する(1つ目のサーバがポートを持っている)ので、
+    死んだと分かったときも、もう一度だけ応答を見る。
+    """
     deadline = time.monotonic() + START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if server_config(http_port) is not None:
             return True
+        if process is not None and process.poll() is not None:
+            return server_config(http_port) is not None
         time.sleep(0.5)
     return False
+
+
+def _log_tail(log: Path) -> str:
+    try:
+        text = log.read_bytes()[-4096:].decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-LOG_TAIL_LINES:])
+
+
+def _start_failure_message(process: subprocess.Popen, data_dir: Path, http_port: int) -> str:
+    log = data_dir / "logs" / "server.log"
+    code = process.poll()
+    if code is None:
+        head = f"duocad のサーバが {int(START_TIMEOUT_SECONDS)} 秒以内に立たなかった。"
+    else:
+        head = (
+            f"duocad のサーバが起動の直後に終了した(終了コード {code})。"
+            f"ポート {http_port} を別のプログラムが使っているときもこうなる。"
+        )
+    tail = _log_tail(log)
+    return head + (f"\n\nログの末尾:\n{tail}" if tail else "") + f"\n\nログ: {log}"
 
 
 def _edge_path() -> Optional[str]:
@@ -127,12 +167,12 @@ def _edge_path() -> Optional[str]:
     return None
 
 
-def open_app_window(url: str) -> None:
-    """Edgeのアプリウィンドウで開く。Edgeが見つからなければ既定のブラウザで開く。"""
+def open_app_window(url: str) -> bool:
+    """Edgeのアプリウィンドウで開く。Edgeが見つからなければ既定のブラウザで開く(False)。"""
     edge = _edge_path()
     if edge is None:
         webbrowser.open(url)
-        return
+        return False
     subprocess.Popen(
         [edge, f"--app={url}"],
         stdin=subprocess.DEVNULL,
@@ -140,6 +180,7 @@ def open_app_window(url: str) -> None:
         stderr=subprocess.DEVNULL,
         close_fds=True,
     )
+    return True
 
 
 #: 安定版のアプリウィンドウのタイトル。Edgeの `--app` 窓はページの `<title>` だけをタイトルにする
@@ -220,6 +261,47 @@ def bring_to_front(hwnd: int) -> None:
             user32.AttachThreadInput(ours, theirs, False)
 
 
+@contextlib.contextmanager
+def _single_launch(http_port: int, timeout: float):
+    """同じポートの起動口を1つずつにする(名前付きミューテックス。Windows 以外では何もしない)。
+
+    続けて起動した2つ目は、1つ目がサーバを立てて窓を出し終えるまで待つ。待たせないと、2つ目も
+    サーバを立てに行き、窓がまだ無いので窓も開く。取れなかった(期限・Windows 以外)ときも進める。
+    """
+    kernel32 = None
+    handle = None
+    acquired = False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.CreateMutexW(None, False, f"Local\\duocad-launcher-{http_port}")
+        if handle:
+            # 0: 取れた / 0x80: 前の持ち主が手放さずに終わった。どちらも自分のもの。
+            acquired = kernel32.WaitForSingleObject(handle, int(timeout * 1000)) in (0, 0x80)
+    except (ImportError, AttributeError, OSError):
+        handle = None
+    try:
+        yield acquired
+    finally:
+        if handle:
+            if acquired:
+                kernel32.ReleaseMutex(handle)
+            kernel32.CloseHandle(handle)
+
+
+def _wait_for_app_window() -> None:
+    deadline = time.monotonic() + WINDOW_APPEAR_SECONDS
+    while time.monotonic() < deadline and find_app_window() is None:
+        time.sleep(0.25)
+
+
 def _alert(message: str) -> None:
     """pythonw には標準出力が無いので、失敗はメッセージボックスで言う。"""
     try:
@@ -241,6 +323,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     data_dir = args.data_dir.expanduser().resolve()
     url = f"http://127.0.0.1:{args.http_port}/"
 
+    with _single_launch(args.http_port, START_TIMEOUT_SECONDS + WINDOW_APPEAR_SECONDS + 10.0):
+        return _launch(args, data_dir, url)
+
+
+def _launch(args: argparse.Namespace, data_dir: Path, url: str) -> int:
     running = server_config(args.http_port)
     if running is not None and running.get("channel") != args.channel:
         # 開発セッションが同じポートで別のduocadを立てている。そちらを安定版として開かない。
@@ -250,12 +337,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
     if running is None:
-        spawn_server(args.channel, args.port, args.http_port, data_dir)
-        if not wait_for_server(args.http_port):
-            _alert(
-                f"duocad のサーバが {int(START_TIMEOUT_SECONDS)} 秒以内に立たなかった。\n"
-                f"ログ: {data_dir / 'logs' / 'server.log'}"
-            )
+        process = spawn_server(args.channel, args.port, args.http_port, data_dir)
+        if not wait_for_server(args.http_port, process):
+            _alert(_start_failure_message(process, data_dir, args.http_port))
             return 1
     if not args.no_window:
         # 既に開いていれば新しい窓を作らずにそれを前に出す。2つ開くと、今の文書を開き直す操作が
@@ -263,8 +347,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         existing = find_app_window()
         if existing is not None:
             bring_to_front(existing)
-        else:
-            open_app_window(url)
+        elif open_app_window(url):
+            _wait_for_app_window()
     return 0
 
 

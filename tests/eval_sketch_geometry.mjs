@@ -48,6 +48,12 @@ function close(actual, expected, what) {
   close(lengthOnly.p1[0], 0, '長さだけ打った終点u')
   close(lengthOnly.p1[1], 10, '長さだけ打った終点v')
 
+  // 90度の倍数は丸め誤差の無い座標になる
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, 90).p1, [10, 55], '90度')
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, 180).p1, [-40, 5], '180度')
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, 270).p1, [10, -45], '270度')
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, -90).p1, [10, -45], '-90度')
+
   assert.equal(lineFromPoints([5, 5], [5, 5], undefined, undefined), null, '長さ0の線分は作れない')
   assert.equal(lineFromPoints([0, 0], [1, 0], 0, undefined), null, '長さ0を打っても作れない')
   assert.equal(lineFromPoints([0, 0], [1, 0], -3, undefined), null, '負の長さは作れない')
@@ -72,10 +78,25 @@ function close(actual, expected, what) {
   close(keyed.width, 10, '寸法だけ打った幅')
   close(keyed.height, 6, '寸法だけ打った高さ')
 
-  // **打った寸法も引いた向きへ伸ばす**(始点の反対側へ回ると向きが反転する)
-  const flipped = rectFromPoints([0, 0], [-1, -1], 10, 6)
-  close(flipped.corner[0], -10, '左下へ回したときの左下u')
-  close(flipped.corner[1], -6, '左下へ回したときの左下v')
+  // 片方だけ打ったときは、打った寸法も引いた向きへ伸ばす(始点の反対側へ回ると向きが反転する)
+  const flipped = rectFromPoints([0, 0], [-1, -8], 10, undefined)
+  close(flipped.corner[0], -10, '幅だけ打って左下へ回したときの左下u')
+  close(flipped.corner[1], -8, '幅だけ打って左下へ回したときの左下v')
+  assert.equal(rectFromPoints([0, 0], [5, 5], -10, undefined), null, '片方だけの負は作れない')
+  assert.equal(rectFromPoints([0, 0], [5, 5], undefined, -6), null, '高さだけの負も作れない')
+
+  // 幅と高さを両方打てば、符号が向きを決める(マウスの位置は見ない)
+  for (const pointer of [[-1, -1], [1, 1], [0, 0], [1, -1]]) {
+    const plus = rectFromPoints([5, 5], pointer, 10, 6)
+    assert.deepEqual(plus.corner, [5, 5], `両方正はマウス ${pointer} によらず +u +v 側`)
+    const minusBoth = rectFromPoints([5, 5], pointer, -10, -6)
+    assert.deepEqual(minusBoth.corner, [-5, -1], `両方負はマウス ${pointer} によらず -u -v 側`)
+  }
+  const minusWidth = rectFromPoints([5, 5], [5, 5], -10, 6)
+  assert.deepEqual(minusWidth.corner, [-5, 5], '幅だけ負なら -u 側・+v 側')
+  close(minusWidth.width, 10, '負の幅は絶対値で送る')
+  close(minusWidth.height, 6, '高さ')
+  assert.equal(rectFromPoints([0, 0], [5, 5], -10, 0), null, '両方打っても0は作れない')
 
   // 幅だけ打てば高さはマウスが握る
   const half = rectFromPoints([0, 0], [1, 25], 10, undefined)

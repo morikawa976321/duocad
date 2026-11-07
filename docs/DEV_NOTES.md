@@ -23,6 +23,9 @@
   読み込んだ時点で論理コア数（この機械では14）ぶんの作業域を確保する。2026-10-24 に測った private bytes（14 → 1 スレッド）:
   サーバ本体（`python -m duocad.mcp_server`）1.11 → 0.30 GB、面の編集の子（`kernel_worker`）と干渉チェックの子
   （`interference_worker`）は各 0.55 → 0.14 GB、`import numpy, scipy.linalg` だけで 0.86 → 0.04 GB。
+  サーバの `warm_up_in_background()` は本番に続いて計算用の予備を1本持つ。2026-11-06の予備の実体 PID の private bytes は
+  149,630,976 bytes(142.7 MiB、0.150 GB / 0.139 GiB)。予備だけでこの分が常駐時に増える。先立てを呼ばない pytest・スクリプトは本番1本のまま。
+  条件と待ちの実測は [FACE_EDIT.md](FACE_EDIT.md)「予備の寿命と実測」。
   - 読み込んだ後に `threadpoolctl.threadpool_limits(1)` で絞っても 0.857 GB のまま返らない。`python -m duocad.mcp_server` でも
     `mcp_server.py` の本文より先に `duocad/__init__.py` が verb を読み込んで numpy に届くので、置き場所はここしかない。
     子は `worker_process` が `os.environ` を渡すので同じ値を継ぐ。
@@ -159,7 +162,7 @@ npm run check --prefix web                               # tsc と svelte-check�
   切る。`commands/command.ts` の `SelectableKind` / `KIND_COUNTERS` はコアの `SELECTABLE_KINDS` の写しで、足し忘れると件数表示が
   `undefined` になる（`ref as ShapeRef` のキャストで書かれているため `tsc` では出ない）。
 - **`ws="none"`（MCP 専用）の verb は画面の `Applied` に載らない。** ブラウザに開けていないのに操作ログに載る verb
-  （`add_mesh_body` / `mirror_sketch_entities`）は全ブラウザへ状態配信されるが、型が無くても検査は緑。足すとき `Applied` を省略
+  （MCP 専用の `add_mesh_body`、コード専用の `add_solid_body`）は全ブラウザへ状態配信されるが、型が無くても検査は緑。足すとき `Applied` を省略
   してよいかは都度判断し、省略するなら理由を宣言に書く。
 - **文書の置き場は「誰が直せるか」で決める。** AI の作業ディレクトリの外にある文書は実装が進むたびに古くなる。コードと同じ
   リポジトリなら同じコミットで直せる。日付入りのファイル名は継続改訂する文書に向かない。

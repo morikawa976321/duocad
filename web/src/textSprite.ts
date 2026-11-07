@@ -44,6 +44,8 @@ export function makeTextSprite(
     ctx.fillText(text, SPRITE_PADDING_PX, canvas.height / 2, canvas.width - 2 * SPRITE_PADDING_PX)
   }
   const texture = new THREE.CanvasTexture(canvas)
+  // 既定の NoColorSpace のままだと、レンダラの sRGB 出力で札の色が二重に変換されて明るく出る。
+  texture.colorSpace = THREE.SRGBColorSpace
   const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, transparent: true })
   const sprite = new THREE.Sprite(material)
   sprite.scale.set(height * (canvas.width / canvas.height), height, 1)

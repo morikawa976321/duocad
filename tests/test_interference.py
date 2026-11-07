@@ -103,7 +103,8 @@ def test_a_box_distance_between_the_clearance_and_the_clearance_plus_the_band_is
 
 
 def test_the_rounded_core_with_a_concentric_gap_is_at():
-    """形全体の最短距離が落ちるかどうかは形の表現(BRep の往復)で変わる。どちらの段で測れても at(上界の印は下の素の値の試験が見る)。"""
+    """形全体の最短距離が落ちるかどうかは形の表現(BRep の往復)で変わる。どちらの段で測れても at
+    (面の対ごとの段では、距離が落ちた対が最小を下回らないことをカーネルが確かめて、上界の印を付けない)。"""
     shell, core = nested_boxes(0.2)
     entry = pair_of(check(document_of(("shell", shell), ("core", core)), 0.2), "shell", "core")
     assert entry["relation"] == "separated" and entry["clearance"] == "at"
@@ -204,6 +205,12 @@ def test_clearance_rules(relation, distance, clearance, expected):
     assert interference.classify_clearance(relation, distance, clearance) == expected
 
 
+@pytest.mark.parametrize("distance, expected", [(0.1, "short"), (0.2 - 5e-7, None), (0.2, None), (0.2 + 5e-7, None), (0.5, None)])
+def test_an_upper_bound_distance_can_prove_short_but_never_at_or_ok(distance, expected):
+    """落ちたら、縁の点から測った上界の距離で隙間が要求どおり・足りていると判定され、一覧から消える。"""
+    assert interference.classify_clearance("separated", distance, 0.2, upper_bound=True) == expected
+
+
 class FakeWorker:
     """子の代わりに決まった答えを返す。`relations[(a, b)]` / `distances[(a, b)]` が例外なら投げる。"""
 
@@ -263,7 +270,8 @@ def test_a_relation_the_fuse_could_not_answer_stays_unknown_but_keeps_a_measured
     assert first["relation"] == "unknown" and "GF が落ちた" in first["reason"]
     assert first["distance"] == 0.0 and first["clearance"] == "short"
     second = pair_of(result, "a", "c")
-    assert second["relation"] == "unknown" and "mystery" in second["reason"] and second["clearance"] == "ok"
+    assert second["relation"] == "unknown" and "mystery" in second["reason"] and second["clearance"] is None
+    assert "上界" in second["clearance_reason"]
     assert second["distance_upper_bound"] is True
 
 
