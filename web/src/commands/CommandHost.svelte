@@ -48,6 +48,7 @@
     findCommand,
     evictionsForClick,
     firstMissingArg,
+    hostsCommand,
     itemsForArg,
     needsEnter,
     overflowNote,
@@ -1101,12 +1102,13 @@
     <span class="label">コマンド</span>
     <div class="command-body">
       {#each commands.filter((c) => !c.hidden) as candidate (candidate.id)}
+        {@const hosting = command !== null && hostsCommand(candidate, command)}
         <button
           id={candidate.buttonId}
-          class:on={command !== null && candidate.id === command.id}
-          onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
-          disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
-          title={command !== null && candidate.id === command.id && needsEnter(candidate) ? 'もう一度押すか Enter で確定' : candidate.title}
+          class:on={hosting}
+          onclick={() => (hosting ? pressActive() : start(candidate.id))}
+          disabled={hosting && command !== null && (busy || (!ready && needsEnter(command)))}
+          title={hosting && command !== null && needsEnter(command) ? 'もう一度押すか Enter で確定' : candidate.title}
         >
           <!-- 押している間も文言を変えない: 幅が伸びるとツールバーの行が組み替わり、1280px 幅で後ろのボタンが2行目へ落ちた。
                Enter で確定することは `#command-prompt` が出す。 -->
@@ -1125,6 +1127,26 @@
 
 {#if overlayOpen}
   <div class="toolbar-overlay" bind:this={overlayEl}>
+  {#if command?.variants}
+    {@const variants = command.variants}
+    <div class="row">
+      <span class="label">{variants.label}</span>
+      {#each variants.options as option (option.id)}
+        <button
+          id={option.buttonId}
+          title={option.title}
+          class:on={option.id === command.id}
+          disabled={busy}
+          onclick={(event) => {
+            ;(event.currentTarget as HTMLElement).blur()
+            if (option.id !== command?.id) start(option.id)
+          }}
+        >
+          {option.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
   {#if choiceArgs.length}
     <div class="row">
       {#each choiceArgs as spec (spec.name)}

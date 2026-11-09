@@ -1,6 +1,6 @@
 /**
  * `web/src/commands/*.ts` の `CommandDef` を**実際に読み込み**、`tests/test_ui_command_wiring.py` が
- * 突き合わせる値(id・`needsEnter` の結果・サーバへ行かない選択肢・ピック引数の名前・選択の粒度)を JSON で標準出力へ書く。
+ * 突き合わせる値(id・ボタンを出すか・分け合う verb・`needsEnter` の結果・サーバへ行かない選択肢・ピック引数の名前・選択の粒度)を JSON で標準出力へ書く。
  *
  * Node の型除去は拡張子の無い相対 import(`from './command'`)を解決しない(Vite は補う)ので、
  * 解決に失敗したときだけ `.ts` を補う resolve フックを先に登録する。
@@ -27,7 +27,8 @@ for (const file of readdirSync(directory).filter((name) => name.endsWith('.ts'))
           : [],
       )
       const picks = def.args.filter((arg) => arg.kind === 'pick').map((arg) => arg.name)
-      found.set(def.id, { id: def.id, file, title: def.title ?? null, needsEnter: needsEnter(def), unsent, picks, grain: grainOf(def) })
+      const variants = def.variants === undefined ? null : def.variants.options.map((option) => option.id)
+      found.set(def.id, { id: def.id, file, title: def.title ?? null, hidden: def.hidden === true, variants, needsEnter: needsEnter(def), unsent, picks, grain: grainOf(def) })
     }
   }
 }

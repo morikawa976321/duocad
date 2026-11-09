@@ -243,6 +243,27 @@ def test_every_command_button_has_a_one_line_title():
     assert not too_long, f"30字を超える title: {too_long}"
 
 
+def test_verbs_sharing_one_button_agree_on_the_switch():
+    """`variants` で1つのボタンを分け合う verb は、全員が同じ並びを持ち、先頭だけがツールバーにボタンを出す。
+
+    落ちたら、切り替えた先で切替の行が消えて戻れないか、ボタンが2つ並ぶか、どのボタンも光らない。
+    """
+    commands = {command["id"]: command for command in _ui_commands()}
+    problems = []
+    for command in commands.values():
+        variants = command["variants"]
+        if variants is None:
+            continue
+        if command["id"] not in variants:
+            problems.append(f"{command['id']}: 自分が並びに居ない {variants}")
+        for index, verb in enumerate(variants):
+            other = commands.get(verb)
+            if other is None or other["variants"] != variants:
+                problems.append(f"{command['id']}: {verb} が同じ並びを持たない")
+            elif other["hidden"] != (index > 0):
+                problems.append(f"{verb}: ボタンを出すのは並びの先頭だけ")
+    assert problems == [], problems
+
 def test_server_command_tables_are_readable():
     """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
     names = _server_command_names()
