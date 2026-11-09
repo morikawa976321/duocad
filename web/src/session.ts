@@ -123,10 +123,11 @@ export interface BodyGeometry extends BodyMeta {
 // --------------------------------------------------------------------------------------
 // C: スケッチ
 // --------------------------------------------------------------------------------------
-/** スケッチを貼る平面(コアの PlaneRef。基準3面・既存ソリッドの平面状の面・そのオフセット)。 */
+/** スケッチを貼る平面(コアの PlaneRef。基準3面・既存ソリッドの平面状の面・既存スケッチの平面・そのオフセット)。 */
 export type PlaneRef =
   | { kind: 'base'; name: BasePlaneName; provenance?: unknown }
   | { kind: 'face'; body: string; index: number; provenance?: unknown }
+  | { kind: 'sketch'; sketch: string; provenance?: unknown }
   | { kind: 'offset'; base: PlaneRef; distance: number; provenance?: unknown }
 
 export type BasePlaneName = 'XY' | 'XZ' | 'YZ'

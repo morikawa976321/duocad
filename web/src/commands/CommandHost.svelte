@@ -930,14 +930,14 @@
   }
 
   /**
-   * ソリッドの面をクリックした(貼る先を「選択にある面」にする)。ここでは適用しない: 面はサーバがコアの選択から取るので、同時に出した選択変更が配信されるまで送れない。
+   * ソリッドの面かスケッチの領域・図形をクリックした(貼る先を「選択にある面 / スケッチの平面」にする)。ここでは適用しない: サーバがコアの選択から取るので、同時に出した選択変更が配信されるまで送れない。
    * 適用は上の `$effect`(`selfSelections` が増えたとき)が行う。
    */
-  export function useSelectedFaceAsPlane(): boolean {
+  export function useSelectionAsPlane(what: 'face' | 'sketch'): boolean {
     if (command === null) return false
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'plane') return false
-    planes = { ...planes, [spec.name]: 'face' }
+    planes = { ...planes, [spec.name]: what }
     return true
   }
 

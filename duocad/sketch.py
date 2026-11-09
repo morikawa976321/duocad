@@ -501,13 +501,22 @@ def face_plane(body_id: BodyId, face_index: int) -> dict:
     }
 
 
+def sketch_plane(sketch_id: SketchId) -> dict:
+    """既存スケッチの平面への参照。`{"kind": "sketch", "sketch": <SketchId>, "provenance": None}`。
+
+    `resolve_plane` を通すと、そのスケッチが**いま持っている姿勢**(`frame`)が焼き付く。参照先が面やオフセット平面に
+    貼ったスケッチでも、解き直すのは参照先のスケッチ自身の枠で、その面・基準を辿り直さない。
+    """
+    return {"kind": "sketch", "sketch": str(sketch_id), "provenance": None}
+
+
 def offset_plane(base: Any, distance: float) -> dict:
     """基準平面(base)から法線方向に `distance` だけ離れたオフセット平面への参照。
 
-    `{"kind": "offset", "base": <base|face のPlaneRef>, "distance": float, "provenance": None}`。
+    `{"kind": "offset", "base": <base|face|sketch のPlaneRef>, "distance": float, "provenance": None}`。
     **`sketch_create` へ渡す引数の形**で姿勢は `resolve_plane` が焼き付ける。`base` は `resolve_plane` に渡せる形なら
-    何でもよい(ここでは正規化しない)。**`base` は "base" か "face" だけ**(offsetのoffsetは `resolve_plane` が弾く。
-    多段の入れ子は「どの段がどの向きか」の負担が増えるだけ)。
+    何でもよい(ここでは正規化しない)。**`base` は "base"・"face"・"sketch" だけ**(offsetのoffsetは `resolve_plane` が弾く。
+    多段の入れ子は「どの段がどの向きか」の負担が増えるだけ。オフセット平面のスケッチを基準にするときは "sketch" で指す)。
     """
     return {
         "kind": "offset",
@@ -755,7 +764,7 @@ def entity_params(
 def resolve_plane(doc: Document, plane: Any) -> dict:
     """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。
 
-    **面参照・offset参照はここで姿勢まで解決して `frame` に焼き付ける**(`kernel_sketch.face_frame` /
+    **面参照・スケッチ参照・offset参照はここで姿勢まで解決して `frame` に焼き付ける**(`kernel_sketch.face_frame` /
     `offset_plane_frame`)。「姿勢をライブに引き直さない」の唯一の入口で、offset参照は `base` を再帰的に解決する。
     `doc` は**いまこの瞬間の形状**から解決するため: 再生(`_do_sketch_create`)では履歴時点の形状に対して解き直すので、
     スケッチ作成**より前**のパラメータ編集には追随し、**より後**の面取り・フィレットには動かされない。
@@ -780,6 +789,14 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             "index": face_index,
             "provenance": plane.get("provenance"),
             "frame": kernel_sketch.face_frame(body.shape, face_index),
+        }
+    if isinstance(plane, dict) and plane.get("kind") == "sketch":
+        source = get_sketch(doc, plane["sketch"])
+        return {
+            "kind": "sketch",
+            "sketch": source.id,
+            "provenance": plane.get("provenance"),
+            "frame": kernel_sketch.sketch_plane_frame(source.plane),
         }
     if isinstance(plane, dict) and plane.get("kind") == "offset":
         base_ref = resolve_plane(doc, plane["base"])
@@ -929,8 +946,11 @@ del _verb
 
 # 入口(`duocad/entry.py`)
 def plane_from_selection(document: Document, base_plane: Any) -> Any:
-    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**選択の面**か**選択の原点の平面**(合わせてちょうど1つ。
-    2つ以上なら `SelectionAmbiguous`)。平面も選択も無ければエラー(既定で XY に貼ると図形が静かに別の場所に出る)。
+    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**選択の面**か**選択の原点の平面**か
+    **選択のスケッチの平面**(合わせてちょうど1つ。2つ以上なら `SelectionAmbiguous`)。平面も選択も無ければエラー
+    (既定で XY に貼ると図形が静かに別の場所に出る)。
+
+    スケッチは、そのスケッチの領域か図形(点・辺)を選んで指す。同じスケッチの項目がいくつあっても1つと数える。
     """
     if base_plane is not None:
         return str(base_plane)
@@ -940,12 +960,23 @@ def plane_from_selection(document: Document, base_plane: Any) -> Any:
         if datum.kind_of(item["datum"]) == datum.PLANE
     ]
     faces = selection.selected_items(document, kind="face")
-    if planes and len(planes) + len(faces) > 1:
+    sketch_ids = list(
+        dict.fromkeys(
+            item["sketch"]
+            for kind in (selection.REGION_KIND, selection.SKETCH_ENTITY_KIND)
+            for item in selection.selected_items(document, kind=kind)
+        )
+    )
+    if (planes or sketch_ids) and len(planes) + len(faces) + len(sketch_ids) > 1:
         raise selection.SelectionAmbiguous(
-            f"exactly one face or datum plane required, got {len(faces)} face(s) and {len(planes)} datum plane(s)", "face"
+            "exactly one face, datum plane or sketch required, got "
+            f"{len(faces)} face(s), {len(planes)} datum plane(s) and {len(sketch_ids)} sketch(es)",
+            "face",
         )
     if planes:
         return planes[0]
+    if sketch_ids:
+        return sketch_plane(sketch_ids[0])
     face = selection.require_selected(document, "face", exactly_one=True)[0]
     return face_plane(face["body"], face["index"])
 

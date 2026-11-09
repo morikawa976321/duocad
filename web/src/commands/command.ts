@@ -352,19 +352,25 @@ export interface TextArgSpec extends ArgSpecCommon {
 }
 
 /**
- * スケッチを貼る先を1つ指す引数(`sketch_create` だけが取る)。値は基準平面の名前か、面は選択にあることを表す `'face'`。
+ * スケッチを貼る先を1つ指す引数(`sketch_create` / `sketch_create_offset` が取る)。値は基準平面の名前か、貼る先はコアの選択に
+ * あることを表す `'face'`(ソリッドの面)/ `'sketch'`(スケッチの領域か図形。そのスケッチの平面)。
  * 面を選択引数にしないのは、「基準平面か面か」のどちらかであって選択集合から導出できないため(選択が空でも基準平面なら揃う)。
- * `build` が送るのは基準平面のときの `{base_plane}` だけで、面は送らない(サーバがコアの選択から取る)。
+ * `build` が送るのは基準平面のときの `{base_plane}` だけで、面・スケッチは送らない(サーバが `sketch.plane_from_selection` で選択から取る)。
  */
 export interface PlaneArgSpec extends ArgSpecCommon {
   kind: 'plane'
 }
 
-/** `PlaneArgSpec` が取りうる値。基準平面3つ(`session.ts` の `BasePlaneName` と同じ綴り)と、貼る先の面はコアの選択にあることを表す `'face'`。 */
-export type PlaneArgValue = 'XY' | 'XZ' | 'YZ' | 'face'
+/** `PlaneArgSpec` が取りうる値。基準平面3つ(`session.ts` の `BasePlaneName` と同じ綴り)と、貼る先はコアの選択にあることを表す `'face'` / `'sketch'`。 */
+export type PlaneArgValue = 'XY' | 'XZ' | 'YZ' | 'face' | 'sketch'
 
 export function isPlaneArgValue(value: unknown): value is PlaneArgValue {
-  return value === 'XY' || value === 'XZ' || value === 'YZ' || value === 'face'
+  return value === 'XY' || value === 'XZ' || value === 'YZ' || value === 'face' || value === 'sketch'
+}
+
+/** 貼る先がコアの選択にある(`base_plane` を送らない)値か。 */
+export function planeFromSelection(value: PlaneArgValue): boolean {
+  return value === 'face' || value === 'sketch'
 }
 
 /**
@@ -765,7 +771,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     return `${spec.label}を打つ(${spec.placeholder})`
   }
   if (spec.kind === 'plane') {
-    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ か、ソリッドの面。選んである面もクリックし直す)`
+    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ・原点の平面・ソリッドの面か、スケッチの領域・線。選んであるものもクリックし直す)`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {

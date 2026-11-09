@@ -236,7 +236,8 @@
     const server = model?.mode ?? { kind: 'idle' }
     if (server.kind === 'sketch') return { kind: 'sketch', id: server.sketch_id }
     if (server.kind === 'optimize') return { kind: 'optimize' }
-    if (model?.command?.verb === 'sketch_create') return { kind: 'sketch-pending' }
+    const pending = model?.command?.verb
+    if (pending !== undefined && runsOutsideSketch(pending)) return { kind: 'sketch-pending' }
     return { kind: 'idle' }
   })
   /** スケッチを抜けたときの戻り先(最適化モードから入ったスケッチを抜けたら最適化モードへ戻る)。サーバは通常へ戻すので、こちらから入り直す。 */
@@ -256,7 +257,7 @@
     wantsPoint(): boolean
     wantsPlane(): boolean
     setBasePlane(name: BasePlaneName): boolean
-    useSelectedFaceAsPlane(): boolean
+    useSelectionAsPlane(what: 'face' | 'sketch'): boolean
     wantsPick(): PickTarget | null
     wantsPickDatum(): boolean
     setPick(ref: SelectionRef): boolean
@@ -1504,11 +1505,11 @@
   /**
    * スケッチモードの外で指せる種類(docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。コマンドを起動していなければ
    * 見えているもの全部、起動中はそのコマンドが受け付ける種類だけ(選択の引数と直接ピックの待ちの和)。スケッチを貼る先
-   * 待ちは面だけ(基準平面は `wantsBasePlanes`)。最適化モードで何も起動していなければ面だけ(保持・拘束を選ぶ場)。
+   * 待ちは面・原点の平面・スケッチの領域と図形(そのスケッチの平面を指す)だけ(基準平面は `wantsBasePlanes`)。最適化モードで何も起動していなければ面だけ(保持・拘束を選ぶ場)。
    * スケッチモード中は見ない(編集中のスケッチの中身だけを指す。`viewport.setActiveSketch`)。
    */
   const pickKinds = $derived.by((): PickKind[] => {
-    if (wantedPlane) return ['face', 'datumPlane']
+    if (wantedPlane) return ['face', 'datumPlane', 'region', 'sketchLine', 'sketchPoint']
     // ローカルのコマンド(測定)は `model.command` に現れないが、受け付ける種類は `wantedKinds` で届く
     const commandActive =
       (model?.command ?? null) !== null || wantedKinds.length > 0 || wantedPick !== null || wantedVertices
@@ -2134,8 +2135,20 @@
           fail('メッシュボディにはスケッチを貼れない(平面が取れない)。基準平面かほかのソリッドの面を指す')
           return
         }
-        host.useSelectedFaceAsPlane()
+        host.useSelectionAsPlane('face')
         selectOnly(faceRef(event.hit.bodyId, event.hit.faceIndex))
+        return
+      }
+      // スケッチの領域・図形はそのスケッチの平面を指す(コアの `sketch.plane_from_selection` がスケッチへ畳む)。
+      const sketchTarget =
+        event.sketchEntity !== null
+          ? sketchEntityRef(event.sketchEntity.sketchId, event.sketchEntity.entityId, event.sketchEntity.point)
+          : event.region !== null
+            ? regionRef(event.region.sketchId, event.region.index)
+            : null
+      if (sketchTarget !== null) {
+        host.useSelectionAsPlane('sketch')
+        selectOnly(sketchTarget)
         return
       }
       // 何も無い所をクリックしたら、通常どおり選択解除だけして待ち続ける(下へ落とす)
@@ -2958,7 +2971,7 @@
           {/if}
         </div>
       {/if}
-      <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には `sketch_create` が起動済みで出ている。 -->
+      <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には構えている verb(`sketch_create` か `sketch_create_offset`)が起動済みで出ている。 -->
       {#if mode.kind === 'sketch-pending'}
         <div class="mode-row">
           <span class="label">スケッチ</span>
@@ -3012,7 +3025,7 @@
                 ? OPTIMIZE_MODE_COMMANDS
                 : SOLID_COMMANDS}
           defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
-          startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
+          startCommandId={mode.kind === 'sketch-pending' ? (model?.command?.verb ?? SKETCH_CREATE.id) : undefined}
           hover={hoverPoint}
           entities={selectedEntities}
           shared={model?.command ?? null}
