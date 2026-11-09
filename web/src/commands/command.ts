@@ -485,6 +485,16 @@ export type BuildArgs<N extends CommandName> = Omit<CommandArguments[N], 'sketch
 
 type UiCommandId = 'select_in_sketch'
 
+export interface CommandVariants {
+  label: string
+  options: ReadonlyArray<{ id: HostCommandName; label: string; buttonId: string; title: string }>
+}
+
+/** ツールバーのボタン `button` が、起動中の `active` を受け持つか(同じ verb か、`variants` で分け合う相手)。 */
+export function hostsCommand(button: CommandDef, active: CommandDef): boolean {
+  return button.id === active.id || (active.variants?.options.some((option) => option.id === button.id) ?? false)
+}
+
 interface CommandDefBase {
   label: string
   /** ボタンにマウスを載せたときの1行の説明(30字程度まで)。キーがあるコマンドは末尾に「(Delete)」のように書く。 */
@@ -492,10 +502,17 @@ interface CommandDefBase {
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
   /**
-   * ツールバーにボタンを出さない(verbとしては生きたまま。AI等の別経路用)。対象は `select_in_sketch` のみ
-   * (直接クリックでの選択と重複するため)。
+   * ツールバーにボタンを出さない(verbとしては生きたまま。AI等の別経路用)。対象は `select_in_sketch`
+   * (直接クリックでの選択と重複するため)と、`variants` の先頭でない verb(先頭のボタンが受け持つ)。
    */
   hidden?: boolean
+  /**
+   * 1つのボタンを分け合う verb の切り替え(投影の「辺・面 / ボディ」)。起動中は引数の行に選択肢と同じ形のボタンで出し、押すと
+   * その verb を起動し直す。並びの先頭がツールバーのボタンを持ち、残りは `hidden`。どの verb にも同じ並びを持たせる。
+   * 選択肢(`ChoiceArgSpec`)にしないのは、id と verb 名の一致(`CommandDef`)を崩さず、選択の種別と粒度(`grainOf`)を verb ごとに保つため。
+   * 切り替えは別の verb への移り替わりなので選択は空になる(コアの `begin_command`)。
+   */
+  variants?: CommandVariants
   args: ArgSpec[]
   /**
    * 確定前の姿の出し方: `server` … サーバの `PREVIEWABLE_VERBS` に載っている(投機実行して形を測らせる) /

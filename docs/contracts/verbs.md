@@ -189,7 +189,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **隠したスケッチへは書けない**(`add_*`・`import_svg` と同じ門 `_common.editable_sketch`。verb 本体の先頭で掛ける。先にスケッチを表示してから。redo・再生は通る)。
 - **写した図形の端点は 0.01 mm 以内なら1点に揃える**(`kernel_project.WELD_TOLERANCE`。近い組から順にまとめ、差し渡し 0.1 mm 以下の図形の両端は1点にしない。円弧の端が集まれば円の上の点 — 違う円の円弧が2つなら2円の交点 — へ揃え、円の上で揃えきれない隙間は短い線分でつなぐ)。STEP の辺の曲線は頂点から形状許容差の分ずれて終わり(本人の PC ケースで最大 0.0097 mm)、揃えないと写した外周が閉じず領域にならない(PC ケースの平らな面 1155 枚のうち、揃えないと 77 枚、揃えると 0 枚)。
 - 外形は隠線処理(`HLRBRep_Algo`)の線で平面を割り、法線方向の直線がボディに当たる面の和の境界。`HLRBRep_HLRToShape` の線は射影の局所座標で返り、3D の曲線を持たない辺がある(`BRepLib.BuildCurves3d` で作ってから世界座標へ戻す)。
-- Web は `PROJECT_TO_SKETCH`(`#sketch-project`、辺・面の選択)と `PROJECT_OUTLINE`(`#sketch-project-outline`、ボディの選択。面のクリックをボディへ畳む)。起動中はスケッチモードでもソリッドを指す(`App.svelte` の `solidPickInSketch`)。
+- Web のボタンは `PROJECT_TO_SKETCH`(`#sketch-project`、辺・面の選択)の1つ。起動中の行の「選ぶ単位」(`#sketch-project-parts` / `#sketch-project-bodies`。`CommandDef.variants`)で `PROJECT_OUTLINE`(ボタンなし。ボディの選択。面のクリックをボディへ畳む)と切り替える。切り替えは別の verb の起動なので選択は空になる。起動中はスケッチモードでもソリッドを指す(`App.svelte` の `solidPickInSketch`)。
 
 ## 押し出し(extrude)の kernel 分離・web 統合・extrude_face 廃止
 

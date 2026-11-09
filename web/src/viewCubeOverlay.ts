@@ -21,8 +21,8 @@ import { BASE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } fro
  * 描画の枠(`viewCubeRect`)でもある。クリックを吸うのは枠の中の立方体の外形だけ(`insideCubeRect`)なので、
  * 大きくするほど右上でモデルを指せる領域が減る。
  */
-export const CUBE_SIZE_PX = 144
-export const CUBE_MARGIN_PX = 12
+const CUBE_SIZE_PX = 144
+const CUBE_MARGIN_PX = 12
 /** `pointerdown` からこれだけ動いたらドラッグ(未満で `pointerup` ならクリック=スナップ)。 */
 export const CUBE_DRAG_THRESHOLD_PX = 4
 /** クリックでスナップするときの視点アニメーション時間[ms]。 */

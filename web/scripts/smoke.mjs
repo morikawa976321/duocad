@@ -11,7 +11,7 @@
  *   5. 自動保存が書けなかったら「未保存」の札が出て、Ctrl+S で書き直すと消える
  *   6. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない(欄が空なら undo / redo になる)
  *   7. 押し出しの結果を、距離欄から Tab で進んで Space で選べる
- *   8. F とビューキューブ下のボタンで、向きを変えずに全体表示になる(入力欄の中の F は効かない)
+ *   8. F で、向きを変えずに全体表示になる(入力欄の中の F は効かない)
  *   9. ビューキューブの外側の余白を引いても視点は回らない(立方体の上を引くと回る)
  *  10. プレビュー中の全体表示は、隠してある元のボディではなく見えている結果に寄る
  */
@@ -276,7 +276,7 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await waitFor(() => document.querySelector('#extrude-mode-join')?.classList.contains('on') === true, 'Space で結果が選ばれない')
   ok('[7] 距離欄から Tab で結果のボタンへ進み、Space で選べる')
 
-  // ================================================================ 8. 全体表示(F キーとビューキューブ下のボタン)
+  // ================================================================ 8. 全体表示(F キー)
   // 向きを変えずに寄る。入力欄にフォーカスがあるときは効かない(F はその欄に打つ文字)。
   const poseOf = () => page.evaluate(() => window.__duocad.cameraPose())
   const distanceOf = (pose) => Math.hypot(...pose.position.map((value, axis) => value - pose.target[axis]))
@@ -306,17 +306,11 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
     fail(`全体表示で視点の向きが変わった: ${JSON.stringify({ directionBefore, directionAfter })}`)
   }
   await farOut()
-  await page.click('#frame-all')
-  await waitFor((limit) => {
-    const pose = window.__duocad.cameraPose()
-    return Math.hypot(...pose.position.map((value, axis) => value - pose.target[axis])) < limit
-  }, '全体表示のボタンを押しても寄らない', [away * 0.8])
-  await farOut()
   await page.click('#distance')
   await page.keyboard.press('KeyF')
   await sleep(500)
   if (!(distanceOf(await poseOf()) > away * 0.9)) fail('入力欄にフォーカスがあるのに F で全体表示になった')
-  ok('[8] F とビューキューブ下のボタンで向きを変えずに全体表示になり、入力欄の中の F は効かない')
+  ok('[8] F で向きを変えずに全体表示になり、入力欄の中の F は効かない')
 
   // ================================================================ 9. ビューキューブの外側の余白は下へ通す
   // 当たりは描いた立方体の外形だけ。四角の隅を引いても視点は回らず、立方体の上を引くと回る。

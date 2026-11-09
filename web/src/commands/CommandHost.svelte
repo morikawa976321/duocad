@@ -48,6 +48,7 @@
     findCommand,
     evictionsForClick,
     firstMissingArg,
+    hostsCommand,
     itemsForArg,
     needsEnter,
     overflowNote,
@@ -214,6 +215,24 @@
 
   /** 人が「いまここを指す」と言った省略可能なピック引数の名前(なければ `null`)。必須のピックは `firstMissingArg` が指すが、省略できるもの(回転中心)は常に「揃っている」側なので、指したいと言う手が要る。 */
   let armedPick = $state<string | null>(null)
+
+  /**
+   * `variants` の切り替えで頼み、まだ配信が届いていない verb(なければ null)。配信前の `command.id` は頼む前のままなので、
+   * それと比べると「ボディ」→「辺・面」と続けて押したときの後の押しを捨て、先の頼みが残る。外すのは頼んだ verb が起動したときと、
+   * 並びの外へ出たときだけ(途中の頼みの配信が先に届いても、最後の頼みはまだ来ていない)。
+   */
+  let requestedVariant: string | null = null
+  $effect(() => {
+    const now = commandId
+    const options = command?.variants?.options ?? []
+    if (now === requestedVariant || !options.some((option) => option.id === requestedVariant)) requestedVariant = null
+  })
+
+  function switchVariant(id: string): void {
+    if (requestedVariant === null && id === command?.id) return
+    requestedVariant = id
+    start(id)
+  }
 
   /** 集まった引数(選択は導出・数値は打った文字列から・点はクリックから)。 */
   const values = $derived.by<ArgValues>(() => {
@@ -1101,12 +1120,13 @@
     <span class="label">コマンド</span>
     <div class="command-body">
       {#each commands.filter((c) => !c.hidden) as candidate (candidate.id)}
+        {@const hosting = command !== null && hostsCommand(candidate, command)}
         <button
           id={candidate.buttonId}
-          class:on={command !== null && candidate.id === command.id}
-          onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
-          disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
-          title={command !== null && candidate.id === command.id && needsEnter(candidate) ? 'もう一度押すか Enter で確定' : candidate.title}
+          class:on={hosting}
+          onclick={() => (hosting ? pressActive() : start(candidate.id))}
+          disabled={hosting && command !== null && (busy || (!ready && needsEnter(command)))}
+          title={hosting && command !== null && needsEnter(command) ? 'もう一度押すか Enter で確定' : candidate.title}
         >
           <!-- 押している間も文言を変えない: 幅が伸びるとツールバーの行が組み替わり、1280px 幅で後ろのボタンが2行目へ落ちた。
                Enter で確定することは `#command-prompt` が出す。 -->
@@ -1125,6 +1145,26 @@
 
 {#if overlayOpen}
   <div class="toolbar-overlay" bind:this={overlayEl}>
+  {#if command?.variants}
+    {@const variants = command.variants}
+    <div class="row">
+      <span class="label">{variants.label}</span>
+      {#each variants.options as option (option.id)}
+        <button
+          id={option.buttonId}
+          title={option.title}
+          class:on={option.id === command.id}
+          disabled={busy}
+          onclick={(event) => {
+            ;(event.currentTarget as HTMLElement).blur()
+            switchVariant(option.id)
+          }}
+        >
+          {option.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
   {#if choiceArgs.length}
     <div class="row">
       {#each choiceArgs as spec (spec.name)}

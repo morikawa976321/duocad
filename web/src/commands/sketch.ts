@@ -14,6 +14,7 @@ import {
   positive,
   type ArgValues,
   type CommandDef,
+  type CommandVariants,
   type Point2,
 } from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
@@ -543,6 +544,15 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   },
 }
 
+/** 投影の「辺・面 / ボディ」。ボタンは「投影」1つで、ボディを選ぶ側は `project_outline` を起動し直す。 */
+const PROJECT_VARIANTS: CommandVariants = {
+  label: '選ぶ単位',
+  options: [
+    { id: 'project_to_sketch', label: '辺・面', buttonId: 'sketch-project-parts', title: '選んだ辺・面をそのまま写す' },
+    { id: 'project_outline', label: 'ボディ', buttonId: 'sketch-project-bodies', title: '選んだボディの外形(影の境界)を写す' },
+  ],
+}
+
 /**
  * 選んだソリッドの辺(1本ずつ)と面(外周と穴のループ)を、編集中のスケッチの平面へ写した図形として足す(Fusion の「投影」)。
  * 起動中はスケッチの中身の代わりにソリッドの面・辺を指す(`App.svelte` の `solidPickInSketch`)。写した図形は普通の図形で、
@@ -552,7 +562,8 @@ export const PROJECT_TO_SKETCH: CommandDef<'project_to_sketch'> = {
   id: 'project_to_sketch',
   label: '投影',
   buttonId: 'sketch-project',
-  title: 'ボディの辺・面をスケッチ平面に投影する',
+  title: 'ボディの辺・面か、ボディの外形をスケッチ平面に投影する',
+  variants: PROJECT_VARIANTS,
   preview: 'server',
   args: [
     {
@@ -574,13 +585,15 @@ export const PROJECT_TO_SKETCH: CommandDef<'project_to_sketch'> = {
 
 /**
  * 選んだボディを、編集中のスケッチの平面の法線方向から見た外形(影の境界。外周と貫通した穴)を図形として足す。
- * 面をクリックするとそのボディを指す(`shapeKind: 'body'`。`grain.ts`)。
+ * 面をクリックするとそのボディを指す(`shapeKind: 'body'`。`grain.ts`)。ボタンは持たず、投影の「ボディ」で入る。
  */
 export const PROJECT_OUTLINE: CommandDef<'project_outline'> = {
   id: 'project_outline',
   label: '外形を投影',
   buttonId: 'sketch-project-outline',
   title: 'ボディの外形をスケッチ平面に投影する',
+  hidden: true,
+  variants: PROJECT_VARIANTS,
   preview: 'server',
   args: [
     {
