@@ -216,6 +216,24 @@
   /** 人が「いまここを指す」と言った省略可能なピック引数の名前(なければ `null`)。必須のピックは `firstMissingArg` が指すが、省略できるもの(回転中心)は常に「揃っている」側なので、指したいと言う手が要る。 */
   let armedPick = $state<string | null>(null)
 
+  /**
+   * `variants` の切り替えで頼み、まだ配信が届いていない verb(なければ null)。配信前の `command.id` は頼む前のままなので、
+   * それと比べると「ボディ」→「辺・面」と続けて押したときの後の押しを捨て、先の頼みが残る。外すのは頼んだ verb が起動したときと、
+   * 並びの外へ出たときだけ(途中の頼みの配信が先に届いても、最後の頼みはまだ来ていない)。
+   */
+  let requestedVariant: string | null = null
+  $effect(() => {
+    const now = commandId
+    const options = command?.variants?.options ?? []
+    if (now === requestedVariant || !options.some((option) => option.id === requestedVariant)) requestedVariant = null
+  })
+
+  function switchVariant(id: string): void {
+    if (requestedVariant === null && id === command?.id) return
+    requestedVariant = id
+    start(id)
+  }
+
   /** 集まった引数(選択は導出・数値は打った文字列から・点はクリックから)。 */
   const values = $derived.by<ArgValues>(() => {
     const collected: ArgValues = {}
@@ -1139,7 +1157,7 @@
           disabled={busy}
           onclick={(event) => {
             ;(event.currentTarget as HTMLElement).blur()
-            if (option.id !== command?.id) start(option.id)
+            switchVariant(option.id)
           }}
         >
           {option.label}
