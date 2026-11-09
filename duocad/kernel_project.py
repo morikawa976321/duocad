@@ -324,7 +324,8 @@ def _shadow_faces(ax3: "gp_Ax3", faces: Sequence[Any], shapes: Sequence[Any]) ->
     """割った面のうち影の内側のもの。細片(`_sliver`)は内側の点を探さず、辺を共有する細片でない面のうち、共有する辺の長さの
     合計が長い側(影の内側か外側か)に揃える(溝の下の細片で影に裂け目を残さない。細片の短い端は外側の面にも接する)。"""
     thin = [_sliver(face) for face in faces]
-    inside = [False if thin[index] else _covered(ax3, face, shapes) for index, face in enumerate(faces)]
+    intersectors = _intersectors(shapes) if not all(thin) else []
+    inside = [False if thin[index] else _covered(ax3, face, intersectors) for index, face in enumerate(faces)]
     for index, shared in enumerate(_shared_lengths(faces)):
         if thin[index]:
             covered = sum(length for other, length in shared.items() if not thin[other] and inside[other])
@@ -363,13 +364,22 @@ def _sliver(face: Any) -> bool:
     return area <= 0.0 or perimeter <= 0.0 or area / perimeter <= _SLIVER_WIDTH
 
 
-def _covered(ax3: "gp_Ax3", face: Any, shapes: Sequence[Any]) -> bool:
-    """面の内側の1点を通る法線方向の直線が、どれかのソリッドに当たるか(当たれば影の内側)。"""
-    point = _interior_point(face, ax3)
-    line = gp_Lin(point, ax3.Direction())
+def _intersectors(shapes: Sequence[Any]) -> List[Any]:
+    """ソリッドごとに `Load` 済みの交点計算器。`Load` は面の数に比例して重く(面 21,908 枚で 1.08 秒)、`Perform` は軽い
+    (同 0.03 秒)ので、割った面ごとに作り直さず使い回す。"""
+    intersectors = []
     for shape in shapes:
         intersector = IntCurvesFace_ShapeIntersector()
         intersector.Load(shape, COLLAPSE_TOLERANCE)
+        intersectors.append(intersector)
+    return intersectors
+
+
+def _covered(ax3: "gp_Ax3", face: Any, intersectors: Sequence[Any]) -> bool:
+    """面の内側の1点を通る法線方向の直線が、どれかのソリッドに当たるか(当たれば影の内側)。"""
+    point = _interior_point(face, ax3)
+    line = gp_Lin(point, ax3.Direction())
+    for intersector in intersectors:
         intersector.Perform(line, -math.inf, math.inf)
         if intersector.IsDone() and intersector.NbPnt() > 0:
             return True
