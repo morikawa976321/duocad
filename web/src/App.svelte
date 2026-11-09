@@ -117,7 +117,6 @@
   import { createFaceChains, suggestedAdditions } from './faceChains'
   import { createInterference } from './interference.svelte'
   import InterferencePanel from './InterferencePanel.svelte'
-  import FrameAllButton from './FrameAllButton.svelte'
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
@@ -2610,7 +2609,7 @@
       if (!ownsEscapeKey(focused)) clearSelectionIfAny()
       return
     }
-    // F は全体表示(ビューキューブ下のボタンと同じ)。修飾キーつき・押しっぱなし・入力欄の中では効かせない。
+    // F は全体表示。修飾キーつき・押しっぱなし・入力欄の中では効かせない。
     if (event.key.toLowerCase() === 'f' && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat)) {
       if (documentOpen && !isImeKey(event) && !ownsEscapeKey(event.target as HTMLElement | null)) viewport?.frameVisible()
       return
@@ -3106,7 +3105,6 @@
       {/if}
 
       {#if documentOpen}
-        <FrameAllButton onclick={() => viewport?.frameVisible()} />
         <InterferencePanel {interference} />
         <SelectionInfoPanel
           item={selectionInfo.item}
