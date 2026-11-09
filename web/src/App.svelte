@@ -2971,7 +2971,7 @@
           {/if}
         </div>
       {/if}
-      <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には `sketch_create` が起動済みで出ている。 -->
+      <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には構えている verb(`sketch_create` か `sketch_create_offset`)が起動済みで出ている。 -->
       {#if mode.kind === 'sketch-pending'}
         <div class="mode-row">
           <span class="label">スケッチ</span>
@@ -3025,7 +3025,7 @@
                 ? OPTIMIZE_MODE_COMMANDS
                 : SOLID_COMMANDS}
           defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
-          startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
+          startCommandId={mode.kind === 'sketch-pending' ? (model?.command?.verb ?? SKETCH_CREATE.id) : undefined}
           hover={hoverPoint}
           entities={selectedEntities}
           shared={model?.command ?? null}
