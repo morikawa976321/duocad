@@ -430,9 +430,13 @@
     z-index: 5;
     /* 幅は `styles.css` の `:root` が持つ(設定ダイアログの位置がこれを見る)。 */
     width: var(--browser-panel-w);
-    /* 下端は同じ列の下に浮くパネル(`OptimizePanel.svelte` の `--browser-bottom-reserve`)の手前で止める。
+    /* 下端は同じ列の下に浮くパネル(`OptimizePanel.svelte` の `--browser-bottom-reserve`、
+       `SelectionInfoPanel.svelte` の `--selection-info-reserve`)の手前で止める。
        上端は verb の引数行のぶん下がっているので、そのぶんも引く。 */
-    max-height: calc(100% - 20px - var(--toolbar-overlay-h, 0px) - var(--browser-bottom-reserve, 0px));
+    max-height: calc(
+      100% - 20px - var(--toolbar-overlay-h, 0px) - var(--browser-bottom-reserve, 0px) -
+        var(--selection-info-reserve, 0px)
+    );
     display: flex;
     flex-direction: column;
     min-height: 0;
