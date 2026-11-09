@@ -636,13 +636,14 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description=(
             "新しいスケッチを作るときに呼ぶ。"
-            "base_plane(XY/XZ/YZ)を渡すか、選択の平面(ちょうど1枚)に貼る。" + _SKETCH_FRAME_HELP
+            "base_plane(XY/XZ/YZ)を渡すか、選択の平面(面・原点の平面・スケッチの領域か図形のどれかちょうど1つ)に貼る。"
+            + _SKETCH_FRAME_HELP
         ),
         params=(
             Param(
                 "base_plane",
                 "string",
-                "基準平面名 XY / XZ / YZ。省略時は選択の面",
+                "基準平面名 XY / XZ / YZ。省略時は選択の面・原点の平面・スケッチの平面",
                 required=False,
             ),
         ),
@@ -659,14 +660,14 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description=(
             "オフセット平面に新しいスケッチを作るときに呼ぶ。"
-            "base_plane(XY/XZ/YZ)を渡すか選択の平面(ちょうど1枚)を基準にし、"
+            "base_plane(XY/XZ/YZ)を渡すか選択の平面(面・原点の平面・スケッチの領域か図形のどれかちょうど1つ)を基準にし、"
             "その法線方向へdistanceだけ離れた平面に貼る。" + _SKETCH_FRAME_HELP
         ),
         params=(
             Param(
                 "base_plane",
                 "string",
-                "基準平面名 XY / XZ / YZ。省略時は選択の面",
+                "基準平面名 XY / XZ / YZ。省略時は選択の面・原点の平面・スケッチの平面",
                 required=False,
             ),
             Param(

@@ -9,6 +9,7 @@ import {
   buildPathArgs,
   isPlaneArgValue,
   pathLike,
+  planeFromSelection,
   pickedRefOf,
   positive,
   type ArgValues,
@@ -338,7 +339,7 @@ export const IMPORT_SVG: CommandDef<'import_svg'> = {
  * 反復(`pattern_*`)の裏返しで、`App.svelte` の送信経路は `needsSketchId`(features.ts)と下の `runsOutsideSketch` で捌く。
  *
  * 基準平面のボタンは置かない(UI指針1「実物をクリックできるものにボタンを作らない」)。
- * 面に貼るときの `build` は `{}` を返す: 面の参照を引数に入れると対象集合の指定方法が2つになる(サーバは `require_selected(doc, "face", exactly_one=True)` で選択から取り、2枚なら `SelectionAmbiguous`)。
+ * 面・スケッチに貼るときの `build` は `{}` を返す: 参照を引数に入れると対象集合の指定方法が2つになる(サーバは `sketch.plane_from_selection` で選択から取り、2つなら `SelectionAmbiguous`)。
  */
 export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   id: 'sketch_create',
@@ -351,7 +352,7 @@ export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   build(values) {
     const plane = values.target
     if (!isPlaneArgValue(plane)) return { ok: false, reason: '貼る先が決まっていない' }
-    return { ok: true, args: plane === 'face' ? {} : { base_plane: plane } }
+    return { ok: true, args: planeFromSelection(plane) ? {} : { base_plane: plane } }
   },
 }
 
@@ -384,7 +385,7 @@ export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
     if (typeof distance !== 'number') return { ok: false, reason: 'オフセット距離が数値でない' }
     return {
       ok: true,
-      args: plane === 'face' ? { distance } : { base_plane: plane, distance },
+      args: planeFromSelection(plane) ? { distance } : { base_plane: plane, distance },
     }
   },
 }

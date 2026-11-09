@@ -5,6 +5,7 @@
   export function planeLabel(plane: SketchState['plane'], faceLabel = '面'): string {
     if (plane.kind === 'base') return plane.name
     if (plane.kind === 'offset') return `オフセット ${plane.distance} mm`
+    if (plane.kind === 'sketch') return 'スケッチの平面'
     return faceLabel
   }
 </script>
