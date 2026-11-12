@@ -43,6 +43,7 @@ OCP_ALLOWED = frozenset(
         "kernel_shell.py",
         "kernel_thread.py",
         "kernel_face_edit.py",
+        "kernel_face_stretch.py",
         "kernel_worker.py",
         "kernel_project.py",
         "kernel_split.py",
@@ -185,10 +186,15 @@ def _private_operation_references(path: Path) -> set[str]:
     return {
         name for name in references if name.split(".")[-1].startswith("_")
         and any(part == "kernel" or part.startswith("kernel_") for part in name.split("."))
-        # 同じ曲率半径超えフィレットを分割した2ファイルなので、この向きの内部参照だけ許す。
-        and not (path.name == "kernel_tight_surface.py"
-                 and name.removeprefix("duocad.").rsplit(".", 1)[0] == "kernel_tight")
+        # 1つの操作を分割した2ファイル(曲率半径超えフィレット・面のオフセット)なので、この向きの内部参照だけ許す。
+        and (path.name, name.removeprefix("duocad.").rsplit(".", 1)[0]) not in _SPLIT_OPERATIONS
     }
+
+
+_SPLIT_OPERATIONS = {
+    ("kernel_tight_surface.py", "kernel_tight"),
+    ("kernel_face_stretch.py", "kernel_face_edit"),
+}
 
 
 def test_operations_do_not_share_private_operation_helpers():

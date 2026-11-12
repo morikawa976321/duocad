@@ -375,6 +375,7 @@ export const SHELL_BODY: CommandDef<'shell_body'> = {
 /**
  * オフセット(`offset_faces`)。選んだ面を外向き法線へ距離だけ動かし、隣の面はそれぞれ自分の曲面のまま伸縮して付いてくる
  * (押し出しと違い、斜めの隣・曲面・丸めの隣も付いてくる。曲面も選べる)。正で太る、負で痩せる。
+ * 端の壁の外面と内面を一緒に選ぶと、サーバが端ごと引き伸ばす(距離は外面が外へ出る量。docs/FACE_EDIT.md「端ごと引き伸ばす」)。
  */
 export const OFFSET_FACES: CommandDef<'offset_faces'> = {
   id: 'offset_faces',
@@ -390,6 +391,7 @@ export const OFFSET_FACES: CommandDef<'offset_faces'> = {
       label: '距離(正=肉が増える/穴は細くなる)',
       unit: 'mm',
       inputId: 'offset-faces-distance',
+      hint: '端の壁の外面と内面を一緒に選ぶと、壁を厚くせず端ごと引き伸ばす(距離は外面が外へ出る量)',
       reject: (value) => (value === 0 ? '距離が0では面が動かない' : null),
     },
   ],
