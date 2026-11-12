@@ -3,7 +3,7 @@
 選んだ面がどれも平面で法線が ±n にそろい、n に沿って一番手前が内向き(−n)・一番先が外向き(+n)の面(端の壁の内面と外面)のとき、
 `offset_faces` はこれで作る(溝の両壁は手前が外向きなので当たらない)。
 n に垂直な切り口 P を、選んだ面に一番近い**柱の区間**(そこを横切る面と辺が、どれも n 方向へ並進しても変わらない区間)に置き、
-P より先を d·n 並進して、間を P での断面の柱で埋める。区間の中なら P をどこに置いても同じ形になる。
+P より先を d·n 並進して、間を P での断面の柱(区間の中から切り出した板の写し)で埋める。区間の中なら P をどこに置いても同じ形になる。
 縮める(d < 0)ときは、同じ区間の中から厚さ |d| の板を抜いて詰める。
 
 `plans` は位相と境界箱だけを見る(親でも子でも呼べる)。`stretch` は子プロセスの中で形を作り、関門(`kernel_face_edit` の
@@ -12,6 +12,7 @@ P より先を d·n 並進して、間を P での断面の柱で埋める。区
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -21,7 +22,6 @@ from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
-from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.Bnd import Bnd_Box
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
@@ -51,6 +51,8 @@ _ANGULAR_TOL = 1e-9
 _ALIGNED_TOL = 1e-12
 #: 体積の増減が断面積 × d と合うとみなす相対差。置いた値(試作の再現ケースで差は 1e-9 未満)
 _VOLUME_RTOL = 1e-6
+#: 伸ばすときに間を埋める板の写しの数の上限(伸ばす量 ÷ 区間の長さ)。置いた値(数十 mm の区間なら 1〜2 枚)
+MAX_COPIES = 64
 
 _HINT = "端ごと引き伸ばせない"
 
@@ -167,46 +169,58 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
     plan = _the_plan(shape, selected)
     direction, d = plan.direction, float(distance)
     span = plan.high - plan.low
-    if d < 0 and span - (-d) < MIN_SPAN:
+    room = span - MIN_SPAN
+    if d < 0 and -d > room:
         raise _edit.FaceEditError(
             f"shrinking by {-d:g} does not fit in the prismatic span {span:g}",
             f"{_HINT}: 縮める量が、切り口を置ける区間の長さ {span:.4g} mm を超える",
         )
-    middle = 0.5 * (plan.low + plan.high)
-    cuts = [middle] if d > 0 else [middle + d / 2, middle - d / 2]
-    move = gp_Trsf()
-    move.SetTranslation(gp_Vec(*(d * value for value in direction)))
+    copies = math.ceil(d / room) if d > 0 else 0
+    if copies > MAX_COPIES:
+        raise _edit.FaceEditError(
+            f"stretching by {d:g} needs {copies} copies of the prismatic slab (span {span:g})",
+            f"{_HINT}: 伸ばす量が、切り口を置ける区間の長さ {span:.4g} mm に比べて大きすぎる",
+        )
+    width = d / copies if d > 0 else -d
+    cuts = [plan.low + MIN_SPAN / 2, plan.low + MIN_SPAN / 2 + width]
 
     splitter = _split(shape, direction, cuts)
-    lower, upper = [], []
+    lower, middle, beyond = [], [], []
     for solid in _brep_topology._face_edit_solids(splitter.Shape()):
         position = _along(_centre(solid), direction)
-        if position < cuts[0]:
-            lower.append(solid)
-        elif position > cuts[-1]:
-            upper.append(solid)
-    if not lower or not upper:
+        (lower if position < cuts[0] else beyond if position > cuts[1] else middle).append(solid)
+    if not lower or not middle or not beyond:
         raise _edit.FaceEditError("the cut did not leave material on both sides", _HINT)
     section = [face for solid in lower for face in _faces_on(solid, direction, cuts[0])]
     if not section:
         raise _edit.FaceEditError("the cut has no section", _HINT)
     area = sum(_brep_geometry._face_edit_face_area(face) for face in section)
-    moved = [BRepBuilderAPI_Transform(solid, move, True) for solid in upper]
-    filler = [BRepPrimAPI_MakePrism(face, gp_Vec(*(d * value for value in direction))).Shape() for face in section] if d > 0 else []
 
+    # 間は中の板(元の形の切れ端)の写しで埋める。柱(`BRepPrimAPI_MakePrism`)で埋めると、全周の円筒の側面が軸の向きと閉じ目の角度の
+    # 違う円筒になり、統合で元の円筒の切れ端と1枚に戻らなかった(実測)。写しなら面はどれも元の面を並進したもの
+    def moved(solids: List[Any], offset: float) -> List[Any]:
+        if offset == 0.0:
+            return [None] * len(solids)
+        shift = gp_Trsf()
+        shift.SetTranslation(gp_Vec(*(offset * value for value in direction)))
+        return [BRepBuilderAPI_Transform(solid, shift, True) for solid in solids]
+
+    shifts =[(beyond, d)] + ([(middle, k * width) for k in range(copies + 1)] if d > 0 else [])
+    placed = [(solids, moved(solids, offset)) for solids, offset in shifts]
     fuse = BRepAlgoAPI_Fuse()
     arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
     for solid in lower:
         arguments.Append(solid)
-    for solid in [*filler, *(maker.Shape() for maker in moved)]:
-        tools.Append(solid)
+    for solids, makers in placed:
+        for solid, maker in zip(solids, makers):
+            tools.Append(solid if maker is None else maker.Shape())
     fuse.SetArguments(arguments)
     fuse.SetTools(tools)
     fuse.SetGlue(BOPAlgo_GlueEnum.BOPAlgo_GlueShift)
     fuse.Build()
     if not fuse.IsDone():
         raise _edit.FaceEditError("fusing the stretched pieces failed", _HINT)
-    seams = [cuts[0]] if d < 0 else [cuts[0], cuts[0] + d]
+    seams = [cuts[0] + k * width for k in range(copies + 2)] if d > 0 else [cuts[0]]
     unifier = ShapeUpgrade_UnifySameDomain(fuse.Shape(), True, True, False)
     unifier.KeepShapes(_edges_off(fuse.Shape(), direction, seams))
     unifier.Build()
@@ -215,7 +229,11 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
 
     final_map = _brep_topology._face_map(final)
     lower_faces = _brep_topology.indexed_map(_brep_topology.compound(lower), TopAbs_ShapeEnum.TopAbs_FACE)
-    upper_faces = [_brep_topology.indexed_map(solid, TopAbs_ShapeEnum.TopAbs_FACE) for solid in upper]
+    owners = [
+        (_brep_topology.indexed_map(solid, TopAbs_ShapeEnum.TopAbs_FACE), maker)
+        for solids, makers in placed
+        for solid, maker in zip(solids, makers)
+    ]
 
     def images(old: Any) -> List[Any]:
         pieces = _brep_history.shape_list(splitter, "Modified", old)
@@ -223,17 +241,14 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
             pieces = [old]
         found = []
         for piece in pieces:
-            if lower_faces.Contains(piece):
-                placed = piece
-            else:
-                owner = next((k for k, faces in enumerate(upper_faces) if faces.Contains(piece)), None)
-                if owner is None:
-                    continue
-                placed = moved[owner].ModifiedShape(piece)
-            fused = _brep_history.shape_list(fuse, "Modified", placed)
-            if not fused and not _brep_history.is_removed(fuse, placed):
-                fused = [placed]
-            found += [x for y in fused for x in _brep_history.through_history(unifier.History(), y)]
+            places = [piece] if lower_faces.Contains(piece) else [
+                piece if maker is None else maker.ModifiedShape(piece) for faces, maker in owners if faces.Contains(piece)
+            ]
+            for place in places:
+                fused = _brep_history.shape_list(fuse, "Modified", place)
+                if not fused and not _brep_history.is_removed(fuse, place):
+                    fused = [place]
+                found += [x for y in fused for x in _brep_history.through_history(unifier.History(), y)]
         return found
 
     before = _brep_topology._face_map(shape)
@@ -431,10 +446,19 @@ def _faces_on(solid: Any, direction: tuple, position: float) -> List[Any]:
 
 
 def _edges_off(shape: Any, direction: tuple, seams: List[float]) -> TopTools_MapOfShape:
-    """継ぎ目(s = `seams` の平面の中にある辺)以外の辺。統合でこれらを残し、元から分かれていた同じ曲面の面どうしを1枚にしない。"""
+    """継ぎ目(s = `seams` の平面の中にある辺)以外の、2枚の面を分ける辺。統合でこれらを残し、元から分かれていた同じ曲面の面どうしを
+    1枚にしない。周期面の閉じ目の辺は1枚の面にしか属さないので残さない(残すと、切り口で割れて閉じ目の角度がずれた円筒の切れ端どうしを
+    1枚に戻せず、全周の円筒が横切る形を断った。sol の指摘で再現)。"""
     ruler = _Ruler(direction)
+    closing = TopTools_MapOfShape()
+    for face in _brep_topology._face_edit_faces(shape):
+        for edge in _brep_topology._face_edit_edges(face):
+            if BRep_Tool.IsClosed_s(edge, face):
+                closing.Add(edge)
     kept = TopTools_MapOfShape()
     for edge in _brep_topology._face_edit_edges(shape):
+        if closing.Contains(edge):
+            continue
         low, high = ruler.span(edge)
         if not any(abs(low - seam) < _edit.LINEAR_TOL and abs(high - seam) < _edit.LINEAR_TOL for seam in seams):
             kept.Add(edge)

@@ -224,6 +224,34 @@ def test_an_end_wall_slightly_off_the_axes_is_stretched():
     assert _brep_topology.face_count(final) == _brep_topology.face_count(shape)
 
 
+@pytest.mark.parametrize("distance", [5.0, -3.0])
+def test_a_closed_tube_whose_round_walls_cross_the_cut_is_stretched(distance):
+    """落ちたら、全周の円筒(閉じ目のある面)が切り口を横切る形で、円筒が切れ端のまま残って断る。"""
+    axis = gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0))
+    tube = BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(axis, 10, 40).Shape(), BRepPrimAPI_MakeCylinder(axis, 8, 38).Shape()).Shape()
+    doc, body_id = _document(tube)
+    before, kinds = _volume(doc, body_id), kinds_of(doc, body_id)
+
+    operation = verbs.offset_faces(doc, _wall(doc, body_id), distance, body_id=body_id)
+
+    assert operation.args["stretch"] is True
+    assert _volume(doc, body_id) == pytest.approx(before + math.pi * (10.0**2 - 8.0**2) * distance, rel=1e-9)
+    assert kinds_of(doc, body_id) == kinds
+    assert _x_planes(doc, body_id) == pytest.approx([0.0, 38.0 + distance, 40.0 + distance])
+
+
+def test_stretching_further_than_the_prismatic_span_fills_the_gap_with_several_slabs():
+    """落ちたら、伸ばす量が柱の区間(x=2〜38)より長いとき、間を埋めた板の継ぎ目が残るか形が崩れる。"""
+    doc, body_id = _document(_sharp())
+    before, count = _volume(doc, body_id), _brep_topology.face_count(doc.get_body(body_id).shape)
+
+    verbs.offset_faces(doc, _wall(doc, body_id), 50.0, body_id=body_id)
+
+    assert _volume(doc, body_id) == pytest.approx(before + SECTION * 50.0, rel=1e-9)
+    assert _brep_topology.face_count(doc.get_body(body_id).shape) == count
+    assert _x_planes(doc, body_id) == pytest.approx([0.0, 2.0, 88.0, 90.0])
+
+
 def test_faces_that_cannot_be_stretched_are_refused_by_the_kernel():
     """落ちたら、引き伸ばしの前提(平行な平面・切り口を置ける区間・両向き)が崩れた選択を、記録済みの再生が通してしまう。"""
     doc, body_id = _document(_sharp())
