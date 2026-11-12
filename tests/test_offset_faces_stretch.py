@@ -288,6 +288,20 @@ def test_a_hole_running_along_the_move_inside_a_wall_is_stretched(distance):
     assert kinds_of(doc, body_id) == kinds
 
 
+@pytest.mark.parametrize("distance", [1.0, -1.0])
+def test_a_hole_whose_axis_runs_on_the_inner_wall_is_stretched(distance):
+    """落ちたら、軸が内壁の平面の上を走る穴(辺をつなぐ統合が OCCT の例外で止まる形)で、引き伸ばしが例外で失敗する。"""
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-1, 2, 10), gp_Dir(1, 0, 0)), 1, 42).Shape()
+    doc, body_id = _document(_unified(BRepAlgoAPI_Cut(_sharp(), hole).Shape()))
+    before, kinds = _volume(doc, body_id), kinds_of(doc, body_id)
+
+    operation = verbs.offset_faces(doc, _wall(doc, body_id), distance, body_id=body_id)
+
+    assert operation.args["stretch"] is True
+    assert _volume(doc, body_id) == pytest.approx(before + (SECTION - math.pi / 2) * distance, rel=1e-9)
+    assert kinds_of(doc, body_id) == kinds
+
+
 def test_stretching_further_than_the_prismatic_span_fills_the_gap_with_several_slabs():
     """落ちたら、伸ばす量が柱の区間(x=2〜38)より長いとき、間を埋めた板の継ぎ目が残るか形が崩れる。"""
     doc, body_id = _document(_sharp())

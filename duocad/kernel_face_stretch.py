@@ -21,7 +21,7 @@ from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
 from OCP.Bnd import Bnd_Box
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
@@ -248,10 +248,7 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
 
     before = _brep_topology._face_map(shape)
     pieces_of = {i: fused_images(TopoDS.Face_s(before.FindKey(i))) for i in range(1, before.Extent() + 1)}
-    unifier = ShapeUpgrade_UnifySameDomain(fuse.Shape(), True, True, False)
-    unifier.KeepShapes(_edges_between_origins(fuse.Shape(), pieces_of))
-    unifier.Build()
-    final = unifier.Shape()
+    final, unified = _unified(fuse.Shape(), _edges_between_origins(fuse.Shape(), pieces_of))
     _edit._structural_gate(final, hint=_HINT)
 
     final_map = _brep_topology._face_map(final)
@@ -260,7 +257,7 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
     for i in range(1, before.Extent() + 1):
         old = TopoDS.Face_s(before.FindKey(i))
         positions = _brep_history.positions_in(
-            final_map, [x for y in pieces_of[i] for x in _brep_history.through_history(unifier.History(), y)]
+            final_map, [x for y in pieces_of[i] for x in unified(y)]
         )
         if len(positions) != 1:
             raise _edit.FaceEditError(f"face {i} maps to {len(positions)} faces after stretching", _HINT)
@@ -450,7 +447,30 @@ def _faces_on(solid: Any, direction: tuple, position: float) -> List[Any]:
     return found
 
 
-def _edges_between_origins(shape: Any, pieces_of: dict) -> TopTools_MapOfShape:
+def _unified(shape: Any, kept: List[Any]):
+    """同じ曲面の切れ端を1枚に戻した形と、`shape` の面 → 戻した後の面の列の関数。`kept` の辺は残す。
+
+    `ShapeUpgrade_UnifySameDomain` は入力を壊すので写しに掛ける。辺もつなぐ統合が例外で止まる形では、写しを取り直して面だけを統合する
+    (動かす向きの直線の辺が継ぎ目で分かれたまま残る。面と形は同じ)。内壁の平面の上を軸が走る穴で、辺をつなぐ段が
+    `Courbes non jointives` を投げた(sol の指摘で実測)。"""
+    for unify_edges in (True, False):
+        copy = BRepBuilderAPI_Copy(shape, True, False)
+        keep = TopTools_MapOfShape()
+        for edge in kept:
+            keep.Add(copy.ModifiedShape(edge))
+        unifier = ShapeUpgrade_UnifySameDomain(copy.Shape(), unify_edges, True, False)
+        unifier.KeepShapes(keep)
+        try:
+            unifier.Build()
+        except Exception:  # noqa: BLE001  OCCT の Standard_Failure(種類は形しだい)
+            continue
+        return unifier.Shape(), (
+            lambda face, copy=copy, unifier=unifier: _brep_history.through_history(unifier.History(), copy.ModifiedShape(face))
+        )
+    raise _edit.FaceEditError("joining the stretched pieces failed", _HINT)
+
+
+def _edges_between_origins(shape: Any, pieces_of: dict) -> List[Any]:
     """`shape`(結合した形)の辺のうち、元の形で別々の面から来た面どうしを分けるもの(`pieces_of` は元の面の添字 → その切れ端)。
     統合ではこれらだけを残す: 同じ面から来た切れ端(切り口・写しの継ぎ目、割れた円筒の切れ端、閉じ目)は1枚に戻し、元から分かれていた
     同じ曲面の面どうしは1枚にしない。継ぎ目の平面と閉じ目の辺だけを外していたときは、`BRepAlgoAPI_Splitter` が全周でない円筒を
@@ -462,12 +482,12 @@ def _edges_between_origins(shape: Any, pieces_of: dict) -> TopTools_MapOfShape:
             position = faces.FindIndex(piece)
             if position:
                 origin[position] = index
-    kept = TopTools_MapOfShape()
+    kept = []
     edge_faces = _brep_topology._face_edit_edge_faces(shape)
     for k in range(1, edge_faces.Extent() + 1):
         sides = {origin[faces.FindIndex(face)] for face in _brep_topology.listed(edge_faces.FindFromIndex(k))}
         if len(sides) != 1 or 0 in sides:
-            kept.Add(edge_faces.FindKey(k))
+            kept.append(edge_faces.FindKey(k))
     return kept
 
 
