@@ -335,8 +335,8 @@ def _measure(shape: Any, face_map: Any, axis: tuple):
             faces_axis = abs(abs(_edit._dot(normal, axis)) - 1.0) < _ANGULAR_TOL
         elif kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
             keeps = _parallel(_edit._vec(adaptor.Cylinder().Axis().Direction()), axis)
-        elif kind == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
-            keeps = _parallel(_edit._vec(adaptor.Direction()), axis)
+        # n 方向の押し出し面も並進で変わらないが、横切らせない: 割って並進した切れ端を `ShapeUpgrade_UnifySameDomain` が1枚に戻さず
+        # (同じ曲面の写しでも、位置だけを動かしても)、楕円の底のある管を断った(sol の指摘で実測)。横切る形は今のオフセットで作る
         bounded = [
             span
             for span in (edge_spans[edge_map.FindIndex(edge)] for edge in _brep_topology._face_edit_edges(face))

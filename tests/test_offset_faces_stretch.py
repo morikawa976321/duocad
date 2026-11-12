@@ -9,11 +9,11 @@ import math
 
 import pytest
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeWedge
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeWedge
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Trsf, gp_Vec
 
 import duocad.verbs as verbs
 from duocad import catalog, kernel_face_edit, kernel_face_stretch, query
@@ -238,6 +238,24 @@ def test_a_closed_tube_whose_round_walls_cross_the_cut_is_stretched(distance):
     assert _volume(doc, body_id) == pytest.approx(before + math.pi * (10.0**2 - 8.0**2) * distance, rel=1e-9)
     assert kinds_of(doc, body_id) == kinds
     assert _x_planes(doc, body_id) == pytest.approx([0.0, 38.0 + distance, 40.0 + distance])
+
+
+def _elliptic_rod(major, minor, length):
+    """X 方向へ押し出した楕円柱(側面は押し出し面)。"""
+    ellipse = gp_Elips(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0), gp_Dir(0, 1, 0)), major, minor)
+    face = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(ellipse).Edge()).Wire()).Face()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(length, 0, 0), False, False).Shape()
+
+
+def test_an_elliptic_tube_keeps_the_plain_offset():
+    """落ちたら、押し出し面が切り口を横切る形を引き伸ばしに振り分け、統合できずに断る(今のオフセットで作れた形が作れなくなる)。"""
+    doc, body_id = _document(BRepAlgoAPI_Cut(_elliptic_rod(12, 10, 40), _elliptic_rod(10, 8, 38)).Shape())
+    before = _volume(doc, body_id)
+
+    operation = verbs.offset_faces(doc, _wall(doc, body_id), 1.0, body_id=body_id)
+
+    assert "stretch" not in operation.args
+    assert _volume(doc, body_id) == pytest.approx(before + math.pi * (12.0 * 10.0 + 10.0 * 8.0), rel=1e-6)
 
 
 def test_stretching_further_than_the_prismatic_span_fills_the_gap_with_several_slabs():
