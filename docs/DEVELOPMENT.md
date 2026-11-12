@@ -391,6 +391,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 | `duocad/kernel_shell.py` | シェル（中空化）の幾何（`shell_solid`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_thread.py` | ねじ山の幾何（山形・隙間の上下限と既定・`thread_face`。[docs/THREAD.md](THREAD.md)）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_face_edit.py` | 面の削除・面のオフセットの幾何と関門（[docs/FACE_EDIT.md](FACE_EDIT.md)）。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_face_stretch.py` | 面のオフセットのうち端ごと引き伸ばす場合の幾何と関門（[docs/FACE_EDIT.md](FACE_EDIT.md)「端ごと引き伸ばす」）。kernel_face_edit を読む | **○** | ✗ |
 | `duocad/kernel_worker.py` | 面の編集（削除・オフセット）・フィレット・面取り・シェルを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
 | `duocad/worker_process.py` | 重い計算を子プロセスで走らせる共通の部品（起動・1行1 JSON の線・時間の上限・取り消し・作り直し。干渉チェックと面の編集が使う） | ✗ | ✗ |
 | `duocad/kernel_split.py` | ボディを平面で割る幾何（`split_by_plane`）。kernel を読むだけの一方向 | **○** | ✗ |

@@ -1,7 +1,9 @@
 """verb `offset_faces` — 選んだ面を外向き法線へ距離だけ動かし、隣の面をそれぞれ自分の曲面のまま伸縮させる(#183)。
 
 正の距離で太る(穴の内面なら穴が細くなる)。動かせるのは平面・円筒・球・トーラスと、押し出し・回転・オフセットの面。選んだ面に接線でつながる
-一定半径の丸めは、同じ半径のまま付いてくる(外して動かし、丸め直す)。**断る**: 距離が大きすぎて面が消える・つながりが
+一定半径の丸めは、同じ半径のまま付いてくる(外して動かし、丸め直す)。
+端の壁の外面と内面(間に肉がある、向かい合う平行な平面)を一緒に選び、手前に柱の区間があるときは、端ごと引き伸ばす(距離は外面が外へ出る量。
+`kernel_face_stretch`)。そうして作った操作はログの args に `"stretch": true` を残し、再生はそれに従う(無ければ今のオフセット)。**断る**: 距離が大きすぎて面が消える・つながりが
 変わる、解析曲面でない面が内側へ曲がりの半径を超えて折り返す、接線の隣が丸めとして扱えない(一定半径の丸めでない自由曲面・円錐・可変半径・丸めの上の丸め)。方式・関門・実測は docs/FACE_EDIT.md。
 
 計算は子プロセス(`kernel_worker`)で行い、断ったら文書もログも変えない。ログの再生(redo・文書を開く)には期限を掛けない。
@@ -34,7 +36,10 @@ def offset_faces(
 
     previous_shape = body.shape
     body.shape = result["shape"]
-    operation = doc.log.append(VERB_OFFSET_FACES, {"faces": face_list, "distance": value, "body_id": body.id})
+    args = {"faces": face_list, "distance": value, "body_id": body.id}
+    if result["provenance"].get("stretch"):
+        args["stretch"] = True
+    operation = doc.log.append(VERB_OFFSET_FACES, args)
     operation.provenance = result["provenance"]
     remember(doc, body.id, operation.seq, previous_shape)
     return operation
@@ -45,7 +50,11 @@ def _do_offset_faces(document: Document, operation: Operation) -> None:
     args = operation.args
     body = replayed_body(document, args["body_id"], what="offset faces")
     result = kernel_face_edit.offset_faces(
-        body.shape, [int(index) for index in args["faces"]], float(args["distance"]), interactive=False
+        body.shape,
+        [int(index) for index in args["faces"]],
+        float(args["distance"]),
+        interactive=False,
+        stretch=bool(args.get("stretch")),
     )
     reapply_shape(document, body, result, operation)
 

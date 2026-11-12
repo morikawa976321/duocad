@@ -4,6 +4,7 @@
   OCCT が延ばせない曲面(押し出し・回転・オフセット)の隣は、消す間だけ同じ形の B-spline の面に置き換え、消した後に元の曲面へ戻す。
 - オフセット(`offset_faces`): `BRepOffset_MakeOffset` を全体0・選んだ面だけ距離 d で。選んだ面に接線でつながる
   一定半径の丸めは、外して(削除と同じ仕組み)、尖った形で動かし、同じ半径で丸め直す(丸めが付いてくる)。
+  端の壁の外面と内面を一緒に選んだときは、端ごと引き伸ばす(`kernel_face_stretch`)。
 
 **OCCT の成功を信じない**: どちらも、閉じられない形や意図と違う形を、例外も `BRepCheck` 落ちも無く返す。結果を面ごとに
 元の面と照らし合わせる関門を通ったときだけ返し、通らなければ `ValueError`(文書には何も触らない)。
@@ -138,30 +139,39 @@ def offset_faces(
     distance: float,
     *,
     interactive: bool = True,
+    stretch: Optional[bool] = None,
 ) -> dict:
-    """`face_indices` の面を外向き法線へ `distance` だけ動かした**新しい形状**を返す(正で太る。計算は子プロセス)。"""
+    """`face_indices` の面を外向き法線へ `distance` だけ動かした**新しい形状**を返す(正で太る。計算は子プロセス)。
+
+    `stretch` は端ごと引き伸ばすか(`kernel_face_stretch`。`distance` は端が外へ出る量)。None は選んだ面から子が決め、
+    決めた方を由来の `"stretch"` に載せる(ログの再生は記録した方を渡す)。"""
     indices = _checked_indices(shape, face_indices, VERB_OFFSET)
     value = float(distance)
     if not math.isfinite(value) or value == 0.0:
         raise ValueError(f"{VERB_OFFSET}: distance must be finite and not 0, got {distance!r}")
-    def remembered(checked: bool, compute) -> dict:
-        return kernel.remembered(VERB_OFFSET, (shape,), (tuple(indices), value, checked), compute)
+    def remembered(checked: bool, method: Optional[bool], compute) -> dict:
+        return kernel.remembered(VERB_OFFSET, (shape,), (tuple(indices), value, checked, method), compute)
 
     if not interactive:
         # 交差の検査を通った結果は、検査を掛けない再生にもそのまま使える(確定 → undo → redo で計算し直さない)
         try:
-            return remembered(True, _not_remembered)
+            return remembered(True, stretch, _not_remembered)
         except _NotRemembered:
             pass
-    return remembered(
+    result = remembered(
         interactive,
+        stretch,
         lambda: kernel_worker.run(
             VERB_OFFSET,
             shape,
-            {"faces": indices, "distance": value, "check_crossing": interactive},
+            {"faces": indices, "distance": value, "check_crossing": interactive, "stretch": stretch},
             timeout=kernel_worker.time_limit(interactive),
         ),
     )
+    if stretch is None:
+        # 決めた方の鍵にも覚える(再生は記録した方を渡すので、ここで覚えないと redo で計算し直す)
+        remembered(interactive, bool(result["provenance"].get("stretch")), lambda: result)
+    return result
 
 
 class _NotRemembered(Exception):
@@ -220,6 +230,8 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
     """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。
 
     `"volume_after"` は関門で積分した結果の体積で、親の `kernel_worker.run` が戻った形の体積として覚える(積分し直さない)。"""
+    from . import kernel_face_stretch
+
     indices = [int(index) for index in arguments["faces"]]
     face_map = _brep_topology._face_map(shape)
     faces = [_brep_topology._face_at(face_map, index) for index in indices]
@@ -229,11 +241,25 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
             provenance = {"verb": VERB_DELETE, "faces": indices}
         elif verb == VERB_OFFSET:
             distance = float(arguments["distance"])
-            final, table, regenerated = _offset_following_blends(shape, faces, distance)
-            if arguments.get("check_crossing"):
-                moved = sorted({position for index in indices for position in table[index]} | set(regenerated))
-                _require_no_crossing(final, moved)
+            stretch = arguments.get("stretch")
+            if stretch is None:
+                stretch = kernel_face_stretch.applicable(shape, indices) is not None
             provenance = {"verb": VERB_OFFSET, "faces": indices, "distance": distance}
+            if stretch:
+                final, table = kernel_face_stretch.stretch(shape, indices, distance)
+                provenance["stretch"] = True
+            else:
+                try:
+                    final, table, regenerated = _offset_following_blends(shape, faces, distance)
+                    if arguments.get("check_crossing"):
+                        moved = sorted({position for index in indices for position in table[index]} | set(regenerated))
+                        _require_no_crossing(final, moved)
+                except FaceEditError as error:
+                    if arguments.get("stretch") is None:
+                        wider = kernel_face_stretch.suggestion(shape, indices)
+                        if wider:
+                            error.hint = f"{error.hint}。{wider}" if error.hint else wider
+                    raise
         else:
             raise ValueError(f"unknown face edit {verb!r}")
     except FaceEditError as error:
