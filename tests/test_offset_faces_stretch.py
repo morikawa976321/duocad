@@ -273,6 +273,21 @@ def test_a_tube_whose_axis_is_slightly_tilted_keeps_the_plain_offset():
     assert _x_planes(doc, body_id) == pytest.approx([0.0, 37.0, 41.0])
 
 
+@pytest.mark.parametrize("distance", [1.0, 5.0, -3.0])
+def test_a_hole_running_along_the_move_inside_a_wall_is_stretched(distance):
+    """落ちたら、壁に食い込んで動かす向きに走る穴(割ると円筒が切れ端に分かれる)の切れ端どうしを1枚に戻せず断る。"""
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-1, 1.5, 6), gp_Dir(1, 0, 0)), 1, 42).Shape()
+    doc, body_id = _document(_unified(BRepAlgoAPI_Cut(_sharp(), hole).Shape()))
+    before, kinds = _volume(doc, body_id), kinds_of(doc, body_id)
+    inside_wall = math.pi - (math.acos(0.5) - 0.5 * math.sqrt(0.75))
+
+    operation = verbs.offset_faces(doc, _wall(doc, body_id), distance, body_id=body_id)
+
+    assert operation.args["stretch"] is True
+    assert _volume(doc, body_id) == pytest.approx(before + (SECTION - inside_wall) * distance, rel=1e-9)
+    assert kinds_of(doc, body_id) == kinds
+
+
 def test_stretching_further_than_the_prismatic_span_fills_the_gap_with_several_slabs():
     """落ちたら、伸ばす量が柱の区間(x=2〜38)より長いとき、間を埋めた板の継ぎ目が残るか形が崩れる。"""
     doc, body_id = _document(_sharp())

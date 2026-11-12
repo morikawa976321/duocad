@@ -207,7 +207,7 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
         shift.SetTranslation(gp_Vec(*(offset * value for value in direction)))
         return [BRepBuilderAPI_Transform(solid, shift, True) for solid in solids]
 
-    shifts =[(beyond, d)] + ([(middle, k * width) for k in range(copies + 1)] if d > 0 else [])
+    shifts = [(beyond, d)] + ([(middle, k * width) for k in range(copies + 1)] if d > 0 else [])
     placed = [(solids, moved(solids, offset)) for solids, offset in shifts]
     fuse = BRepAlgoAPI_Fuse()
     arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
@@ -222,14 +222,6 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
     fuse.Build()
     if not fuse.IsDone():
         raise _edit.FaceEditError("fusing the stretched pieces failed", _HINT)
-    seams = [cuts[0] + k * width for k in range(copies + 2)] if d > 0 else [cuts[0]]
-    unifier = ShapeUpgrade_UnifySameDomain(fuse.Shape(), True, True, False)
-    unifier.KeepShapes(_edges_off(fuse.Shape(), direction, seams))
-    unifier.Build()
-    final = unifier.Shape()
-    _edit._structural_gate(final, hint=_HINT)
-
-    final_map = _brep_topology._face_map(final)
     lower_faces = _brep_topology.indexed_map(_brep_topology.compound(lower), TopAbs_ShapeEnum.TopAbs_FACE)
     owners = [
         (_brep_topology.indexed_map(solid, TopAbs_ShapeEnum.TopAbs_FACE), maker)
@@ -237,7 +229,8 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
         for solid, maker in zip(solids, makers)
     ]
 
-    def images(old: Any) -> List[Any]:
+    def fused_images(old: Any) -> List[Any]:
+        """`old` の切れ端(手前・板の写し・先)の、結合した形での面(統合の前)。"""
         pieces = _brep_history.shape_list(splitter, "Modified", old)
         if not pieces and not _brep_history.is_removed(splitter, old):
             pieces = [old]
@@ -250,15 +243,25 @@ def stretch(shape: Any, face_indices: Sequence[int], distance: float):
                 fused = _brep_history.shape_list(fuse, "Modified", place)
                 if not fused and not _brep_history.is_removed(fuse, place):
                     fused = [place]
-                found += [x for y in fused for x in _brep_history.through_history(unifier.History(), y)]
+                found += fused
         return found
 
     before = _brep_topology._face_map(shape)
+    pieces_of = {i: fused_images(TopoDS.Face_s(before.FindKey(i))) for i in range(1, before.Extent() + 1)}
+    unifier = ShapeUpgrade_UnifySameDomain(fuse.Shape(), True, True, False)
+    unifier.KeepShapes(_edges_between_origins(fuse.Shape(), pieces_of))
+    unifier.Build()
+    final = unifier.Shape()
+    _edit._structural_gate(final, hint=_HINT)
+
+    final_map = _brep_topology._face_map(final)
     translation = tuple(d * value for value in direction)
     table = {}
     for i in range(1, before.Extent() + 1):
         old = TopoDS.Face_s(before.FindKey(i))
-        positions = _brep_history.positions_in(final_map, images(old))
+        positions = _brep_history.positions_in(
+            final_map, [x for y in pieces_of[i] for x in _brep_history.through_history(unifier.History(), y)]
+        )
         if len(positions) != 1:
             raise _edit.FaceEditError(f"face {i} maps to {len(positions)} faces after stretching", _HINT)
         new = TopoDS.Face_s(final_map.FindKey(positions[0]))
@@ -447,23 +450,24 @@ def _faces_on(solid: Any, direction: tuple, position: float) -> List[Any]:
     return found
 
 
-def _edges_off(shape: Any, direction: tuple, seams: List[float]) -> TopTools_MapOfShape:
-    """継ぎ目(s = `seams` の平面の中にある辺)以外の、2枚の面を分ける辺。統合でこれらを残し、元から分かれていた同じ曲面の面どうしを
-    1枚にしない。周期面の閉じ目の辺は1枚の面にしか属さないので残さない(残すと、切り口で割れて閉じ目の角度がずれた円筒の切れ端どうしを
-    1枚に戻せず、全周の円筒が横切る形を断った。sol の指摘で再現)。"""
-    ruler = _Ruler(direction)
-    closing = TopTools_MapOfShape()
-    for face in _brep_topology._face_edit_faces(shape):
-        for edge in _brep_topology._face_edit_edges(face):
-            if BRep_Tool.IsClosed_s(edge, face):
-                closing.Add(edge)
+def _edges_between_origins(shape: Any, pieces_of: dict) -> TopTools_MapOfShape:
+    """`shape`(結合した形)の辺のうち、元の形で別々の面から来た面どうしを分けるもの(`pieces_of` は元の面の添字 → その切れ端)。
+    統合ではこれらだけを残す: 同じ面から来た切れ端(切り口・写しの継ぎ目、割れた円筒の切れ端、閉じ目)は1枚に戻し、元から分かれていた
+    同じ曲面の面どうしは1枚にしない。継ぎ目の平面と閉じ目の辺だけを外していたときは、`BRepAlgoAPI_Splitter` が全周でない円筒を
+    切れ端に割ったときの切れ端どうしの辺を残し、壁を貫く穴の円筒が1枚に戻らずに断った(sol の指摘で再現)。"""
+    faces = _brep_topology._face_map(shape)
+    origin = [0] * (faces.Extent() + 1)
+    for index, pieces in pieces_of.items():
+        for piece in pieces:
+            position = faces.FindIndex(piece)
+            if position:
+                origin[position] = index
     kept = TopTools_MapOfShape()
-    for edge in _brep_topology._face_edit_edges(shape):
-        if closing.Contains(edge):
-            continue
-        low, high = ruler.span(edge)
-        if not any(abs(low - seam) < _edit.LINEAR_TOL and abs(high - seam) < _edit.LINEAR_TOL for seam in seams):
-            kept.Add(edge)
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
+    for k in range(1, edge_faces.Extent() + 1):
+        sides = {origin[faces.FindIndex(face)] for face in _brep_topology.listed(edge_faces.FindFromIndex(k))}
+        if len(sides) != 1 or 0 in sides:
+            kept.Add(edge_faces.FindKey(k))
     return kept
 
 
