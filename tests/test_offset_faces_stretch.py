@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeWedge
@@ -256,6 +256,21 @@ def test_an_elliptic_tube_keeps_the_plain_offset():
 
     assert "stretch" not in operation.args
     assert _volume(doc, body_id) == pytest.approx(before + math.pi * (12.0 * 10.0 + 10.0 * 8.0), rel=1e-6)
+
+
+def test_a_tube_whose_axis_is_slightly_tilted_keeps_the_plain_offset():
+    """落ちたら、軸が 0.001° 傾いた円筒を並進で変わらないとみなして引き伸ばしに振り分け、切れ端が同じ円筒にならずに断る
+    (今のオフセットで作れた形が作れなくなる)。"""
+    angle = math.radians(0.001)
+    axis = gp_Ax2(gp_Pnt(-10, 0, 0), gp_Dir(math.cos(angle), math.sin(angle), 0))
+    outer = BRepAlgoAPI_Common(BRepPrimAPI_MakeCylinder(axis, 10, 60).Shape(), _box(0, -20, -20, 40, 20, 20)).Shape()
+    inner = BRepAlgoAPI_Common(BRepPrimAPI_MakeCylinder(axis, 8, 60).Shape(), _box(-1, -20, -20, 38, 20, 20)).Shape()
+    doc, body_id = _document(BRepAlgoAPI_Cut(outer, inner).Shape())
+
+    operation = verbs.offset_faces(doc, _wall(doc, body_id), 1.0, body_id=body_id)
+
+    assert "stretch" not in operation.args
+    assert _x_planes(doc, body_id) == pytest.approx([0.0, 37.0, 41.0])
 
 
 def test_stretching_further_than_the_prismatic_span_fills_the_gap_with_several_slabs():

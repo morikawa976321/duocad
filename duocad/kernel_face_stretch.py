@@ -46,9 +46,11 @@ from . import (
 MIN_SPAN = 0.01
 #: 向きの許容差(法線が n に垂直・平行とみなす |cos| のずれ)。置いた値で、`kernel_face_edit.ANGULAR_TOL` と同じ
 _ANGULAR_TOL = 1e-9
-#: 座標軸に沿うとみなす、ほかの2成分の大きさの上限。0.001° 傾けた箱で、箱の x 成分と n への内積が 5e-4 mm ずれ、
-#: 継ぎ目の辺を見落として断った(実測)。これ以下なら 1 m 先でも 1e-9 mm
-_ALIGNED_TOL = 1e-12
+#: 向きが座標軸・n に沿うとみなす横ずれの上限(単位ベクトルのほかの成分、n との外積、平面の法線と n の内積の大きさ)。
+#: 1 m 先・1 m 動かしても 1e-9 mm。|cos| のずれで 1e-9 まで許していたときは、0.001° 傾けた箱で箱の x 成分と n への内積が
+#: 5e-4 mm ずれて継ぎ目を見落とし、0.001° 傾いた円筒を並進で変わらないとみなして、割って並進した切れ端が同じ円筒にならずに断った
+#: (どちらも sol の指摘で実測)
+_STRAIGHT_TOL = 1e-12
 #: 体積の増減が断面積 × d と合うとみなす相対差。置いた値(試作の再現ケースで差は 1e-9 未満)
 _VOLUME_RTOL = 1e-6
 #: 伸ばすときに間を埋める板の写しの数の上限(伸ばす量 ÷ 区間の長さ)。置いた値(数十 mm の区間なら 1〜2 枚)
@@ -319,7 +321,7 @@ def _measure(shape: Any, face_map: Any, axis: tuple):
             continue
         low, high = edge_spans[k] = ruler.edge_span(edge)
         curve = BRepAdaptor_Curve(edge)
-        if curve.GetType() == GeomAbs_CurveType.GeomAbs_Line and _parallel(_edit._vec(curve.Line().Direction()), axis):
+        if curve.GetType() == GeomAbs_CurveType.GeomAbs_Line and _runs_along(_edit._vec(curve.Line().Direction()), axis):
             events += [(low, low), (high, high)]
         else:
             events.append((low, high))
@@ -331,10 +333,10 @@ def _measure(shape: Any, face_map: Any, axis: tuple):
         keeps, faces_axis = False, False
         if kind == GeomAbs_SurfaceType.GeomAbs_Plane:
             normal = _edit._vec(adaptor.Plane().Axis().Direction())
-            keeps = abs(_edit._dot(normal, axis)) < _ANGULAR_TOL
+            keeps = abs(_edit._dot(normal, axis)) < _STRAIGHT_TOL
             faces_axis = abs(abs(_edit._dot(normal, axis)) - 1.0) < _ANGULAR_TOL
         elif kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
-            keeps = _parallel(_edit._vec(adaptor.Cylinder().Axis().Direction()), axis)
+            keeps = _runs_along(_edit._vec(adaptor.Cylinder().Axis().Direction()), axis)
         # n 方向の押し出し面も並進で変わらないが、横切らせない: 割って並進した切れ端を `ShapeUpgrade_UnifySameDomain` が1枚に戻さず
         # (同じ曲面の写しでも、位置だけを動かしても)、楕円の底のある管を断った(sol の指摘で実測)。横切る形は今のオフセットで作る
         bounded = [
@@ -374,7 +376,7 @@ class _Ruler:
     def __init__(self, axis: tuple):
         self.axis = axis
         self.component = next(
-            (k for k in range(3) if all(abs(axis[j]) < _ALIGNED_TOL for j in range(3) if j != k)), None
+            (k for k in range(3) if all(abs(axis[j]) < _STRAIGHT_TOL for j in range(3) if j != k)), None
         )
         self.sign = 1.0 if self.component is None or axis[self.component] > 0 else -1.0
         self.rotation = None
@@ -495,6 +497,13 @@ def _along(point: tuple, direction: tuple) -> float:
 def _unit(vector: tuple) -> tuple:
     length = _edit._dot(vector, vector) ** 0.5
     return tuple(value / length for value in vector)
+
+
+def _runs_along(vector: tuple, axis: tuple) -> bool:
+    """`vector` が単位ベクトル `axis` の向き(か逆向き)に、並進しても横へずれないほど沿っているか。"""
+    u = _unit(vector)
+    cross = (u[1] * axis[2] - u[2] * axis[1], u[2] * axis[0] - u[0] * axis[2], u[0] * axis[1] - u[1] * axis[0])
+    return _edit._dot(cross, cross) ** 0.5 < _STRAIGHT_TOL
 
 
 def _parallel(a: tuple, b: tuple) -> bool:
