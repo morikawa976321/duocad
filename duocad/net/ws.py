@@ -101,6 +101,7 @@ from ..agent.providers import (
 )
 from ..session import Session
 from ..topopt import fem, gpu_cg
+from ..view import HiddenBody
 from . import wire
 from .refinement import BackgroundRefinement
 from .interference_runs import InterferenceRuns
@@ -574,8 +575,13 @@ class Server:
                 )
                 await self._push_applied(connection, applied, message)
             # -------------------------------------------------- D: 辺の折れ線(配信しない: 文書は変わらないので要求した接続にだけ返す。`Session.edges` のdocstringが「常時配らない」理由を持つ)
+            # 隠れたボディは `{body_id, hidden: true}` で返し、失敗の札にしない: 画面は自分の写しで見えていると判断して頼むが、
+            # 写しは可視性の配信が届くまで古い(「すべて隠す」やAIの `set_visible` が続くと、その間にカーソルの近くのボディの分が届く)。
             elif command == "get_edges":
-                result = self.session.edges(message["body_id"])
+                try:
+                    result = self.session.edges(message["body_id"])
+                except HiddenBody:
+                    result = {"body_id": message["body_id"], "hidden": True}
                 await _send(connection, {"type": "edges", **result})
             elif command == "get_edge_chains":
                 result = self.session.edge_chains(message["body_id"], list(message["chain_of"]))
@@ -585,7 +591,10 @@ class Server:
                 await _send(connection, {"type": "face_chains", **result})
             # -------------------------------------------------- D: 頂点の座標(`get_edges` と同じく要求した接続にだけ返す)
             elif command == "get_vertices":
-                result = self.session.vertices(message["body_id"])
+                try:
+                    result = self.session.vertices(message["body_id"])
+                except HiddenBody:
+                    result = {"body_id": message["body_id"], "hidden": True}
                 await _send(connection, {"type": "vertices", **result})
             # スケッチの吸着先(`get_edges` と同じく要求した接続にだけ返す)。失敗は `error` に入れて返す(`inspect_selection` と同じ)
             elif command == "get_sketch_guides":

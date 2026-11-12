@@ -88,6 +88,11 @@ def _memo(cache: dict, body_id: str, source: Any, key: Any, compute: Callable[[]
 _FACE_SERIALS = itertools.count(1)
 
 
+class HiddenBody(ValueError):
+    """不可視Bodyの辺・頂点を頼まれた(`DocumentView._visible_brep`)。WS の `get_edges` / `get_vertices` は
+    これを失敗にせず `hidden` の返事にする(画面の可視性はサーバより遅れて届く。`duocad/net/ws.py`)。"""
+
+
 class _FaceTessellations:
     """1つの形の面ごとの三角形を、測り方(`(偏差, 角度偏差)`)ごとに覚える(`DocumentView._face_cache`)。
 
@@ -1187,7 +1192,7 @@ class DocumentView:
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape ({what}を数えられない)")
         if not body.visible:
-            raise ValueError(f"body {body_id!r} is not visible: 隠れているものの{what}は指せない")
+            raise HiddenBody(f"body {body_id!r} is not visible: 隠れているものの{what}は指せない")
         return body
 
     def _prune_body_caches(self, previewing: bool) -> None:

@@ -563,6 +563,8 @@
     onEdgeChains: handleEdgeChains,
     onFaceChains: handleFaceChains,
     onVertices: handleVertices,
+    // 断られたときと同じく「頼んだ」印を消す(また見えたら取り直せる)。
+    onPickDataHidden: (kind) => (kind === 'edges' ? edgesAsked : verticesAsked).clear(),
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
     onSketchGuides: (payload) => sketchGuides.onResult(payload),
@@ -1378,7 +1380,7 @@
 
   /**
    * カーソルの近く(または矩形選択の中)のボディの辺・頂点を頼む(`viewport.onPickDataWanted`)。見えているボディだけ
-   * (隠れているものはサーバが断る)。辺は版ごと(粗さがズームで変わる)、頂点は形の版ごとに頼む(座標は粗さで変わらない)。
+   * (写しが古く、サーバで既に隠れていたものは `hidden` で返る)。辺は版ごと(粗さがズームで変わる)、頂点は形の版ごとに頼む(座標は粗さで変わらない)。
    */
   function requestPickData(bodyIds: readonly string[]): void {
     for (const bodyId of bodyIds) {
