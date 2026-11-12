@@ -12,9 +12,12 @@
  */
 import * as THREE from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 
 import { EDGE_T, cellBox, cellDirection, oppositeFaceIfFacing, regionCells, upForDirection } from './viewCube'
-import { BASE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } from './viewportConstants'
+import { BASE_COLOR, EDGE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } from './viewportConstants'
 
 /**
  * ビューキューブ(常設・26領域)の一辺[画素]と右上の余白[画素]。
@@ -38,6 +41,11 @@ export const CUBE_CIRCUMRADIUS = Math.sqrt(3)
 export const CUBE_NEAR_SAFETY = 0.5
 /** 透視のときのfar平面の余裕率(1超)。 */
 export const CUBE_FAR_MARGIN = 1.5
+/**
+ * 立方体の外形の12辺に引く線の太さ[CSS px]。キューブの面はボディと同じ `BASE_COLOR` なので、
+ * 線が無いと裏にボディが来たときに輪郭が溶けて消える。
+ */
+export const CUBE_OUTLINE_WIDTH_PX = 1.5
 /** 面セルの日本語ラベル。キーは `"i,j,k"`。Z-up右手系。 */
 export const CUBE_FACE_LABELS: Readonly<Record<string, string>> = {
   '1,0,0': '右',
@@ -127,6 +135,25 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     mesh.userData = { i, j, k }
     cubeGroup.add(mesh)
     cubeMaterials.set(`${i},${j},${k}`, material)
+    cubeDisposables.push(geometry, material)
+  }
+
+  {
+    const box = new THREE.BoxGeometry(2, 2, 2)
+    const edges = new THREE.EdgesGeometry(box)
+    const geometry = new LineSegmentsGeometry().fromEdgesGeometry(edges)
+    box.dispose()
+    edges.dispose()
+    const material = new LineMaterial({
+      color: EDGE_COLOR,
+      linewidth: CUBE_OUTLINE_WIDTH_PX,
+      // 第2パスのviewportは常にキューブの枠(CSSピクセルで一辺 `CUBE_SIZE_PX`)なので、解像度は固定でよい。
+      resolution: new THREE.Vector2(CUBE_SIZE_PX, CUBE_SIZE_PX),
+    })
+    const outline = new LineSegments2(geometry, material)
+    // 面と同じ深さに置くと面と奥行きを奪い合って途切れるので、表面からわずかに外へ出す。
+    outline.scale.setScalar(1.002)
+    cubeScene.add(outline)
     cubeDisposables.push(geometry, material)
   }
 
