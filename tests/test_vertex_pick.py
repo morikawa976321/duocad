@@ -87,6 +87,19 @@ def test_the_vertices_of_a_hidden_body_are_refused(session: Session) -> None:
         session.vertices(body.id)
 
 
+@pytest.mark.parametrize("command", ["get_edges", "get_vertices"])
+def test_asking_for_a_hidden_body_over_the_socket_is_not_an_error(session: Session, command: str) -> None:
+    """落ちたら、隠した直後(画面の写しがまだ「見えている」)の取り寄せが赤い札になる。"""
+    body, _ = _box(session)
+    session.set_visible(body.id, False)
+
+    async def script(send):
+        return await send({"cmd": command, "body_id": body.id})
+
+    (answer, _clients) = _browser(session, script)
+    assert answer == {"type": command.removeprefix("get_"), "body_id": body.id, "hidden": True}
+
+
 def test_asking_for_the_vertices_of_an_unknown_body_is_an_error(session: Session) -> None:
     _box(session)
 

@@ -974,6 +974,11 @@ export interface SessionHooks {
   onFaceChains(payload: FaceChainsPayload): void
   /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
   onVertices(payload: VerticesPayload): void
+  /**
+   * 辺・頂点を頼んだボディが、サーバでは既に隠れていた(画面の写しは可視性の配信より遅れる)。失敗ではないので札を出さない
+   * (`catalog.py` の `get_edges` の note)。
+   */
+  onPickDataHidden(kind: 'edges' | 'vertices'): void
   /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
   onMeasure(payload: MeasurePayload): void
   /** 選択情報の表示の返事(状態は変わっていない)。要求した接続にだけ届く。 */
@@ -1304,6 +1309,7 @@ export function createSession(hooks: SessionHooks): Session {
       edges?: EdgeGeometry[]
       chains?: number[][]
       vertices?: VertexGeometry[]
+      hidden?: boolean
       action?: string
       path?: string
       source?: string
@@ -1401,6 +1407,8 @@ export function createSession(hooks: SessionHooks): Session {
         sketch_ghost: message.sketch_ghost ?? null,
         suggestion: message.suggestion ?? null,
       })
+    } else if ((message.type === 'edges' || message.type === 'vertices') && message.hidden === true) {
+      hooks.onPickDataHidden(message.type)
     } else if (message.type === 'edges') {
       hooks.onEdges({
         body_id: message.body_id ?? '',
