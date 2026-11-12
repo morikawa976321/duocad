@@ -1,6 +1,7 @@
 """面のオフセットのうち「端ごと引き伸ばす」場合の幾何(OCPを触るカーネル層)。決定と実測は docs/FACE_EDIT.md「端ごと引き伸ばす」。
 
-選んだ面がどれも平面で法線が ±n にそろい、両向きを含む(端の壁の外面と内面)とき、`offset_faces` はこれで作る。
+選んだ面がどれも平面で法線が ±n にそろい、n に沿って一番手前が内向き(−n)・一番先が外向き(+n)の面(端の壁の内面と外面)のとき、
+`offset_faces` はこれで作る(溝の両壁は手前が外向きなので当たらない)。
 n に垂直な切り口 P を、選んだ面に一番近い**柱の区間**(そこを横切る面と辺が、どれも n 方向へ並進しても変わらない区間)に置き、
 P より先を d·n 並進して、間を P での断面の柱で埋める。区間の中なら P をどこに置いても同じ形になる。
 縮める(d < 0)ときは、同じ区間の中から厚さ |d| の板を抜いて詰める。
@@ -45,6 +46,9 @@ from . import (
 MIN_SPAN = 0.01
 #: 向きの許容差(法線が n に垂直・平行とみなす |cos| のずれ)。置いた値で、`kernel_face_edit.ANGULAR_TOL` と同じ
 _ANGULAR_TOL = 1e-9
+#: 座標軸に沿うとみなす、ほかの2成分の大きさの上限。0.001° 傾けた箱で、箱の x 成分と n への内積が 5e-4 mm ずれ、
+#: 継ぎ目の辺を見落として断った(実測)。これ以下なら 1 m 先でも 1e-9 mm
+_ALIGNED_TOL = 1e-12
 #: 体積の増減が断面積 × d と合うとみなす相対差。置いた値(試作の再現ケースで差は 1e-9 未満)
 _VOLUME_RTOL = 1e-6
 
@@ -62,16 +66,16 @@ class Plan:
     high: float
     #: 切り口より先にある、n に垂直な平面のうち選んでいないもの(1始まり)
     missing: Tuple[int, ...]
-    #: 選んだ面が n の両向きを含む(端の壁の外面と内面)
-    both_signs: bool
-    #: `missing` も選べば両向きを含む
-    both_signs_with_missing: bool
+    #: 選んだ面のうち n に沿って一番手前が内向き(−n)、一番先が外向き(+n)(端の壁の内面と外面)
+    is_end: bool
+    #: `missing` も選べば `is_end` になる
+    is_end_with_missing: bool
     #: 各面(添字順)の s の範囲
     spans: Tuple[Tuple[float, float], ...]
 
     @property
     def applies(self) -> bool:
-        return self.both_signs and not self.missing
+        return self.is_end and not self.missing
 
 
 def plans(shape: Any, face_indices: Sequence[int]) -> List[Plan]:
@@ -99,28 +103,34 @@ def plans(shape: Any, face_indices: Sequence[int]) -> List[Plan]:
         low, high = max(candidates, key=lambda interval: interval[1])
         beyond = [index for index, (a, _) in enumerate(along, 1) if a >= high]
         missing = tuple(index for index in beyond if facing[index - 1] and index not in selected)
-        signs = {_edit._dot(normal, direction) > 0 for normal in normals}
-        signs_with_missing = signs | {
-            _edit._dot(_brep_geometry._face_edit_face_normal(_brep_topology._face_at(face_map, index)), direction) > 0
-            for index in missing
-        }
+        outward = {index: _edit._dot(normal, direction) > 0 for index, normal in zip(selected, normals)}
+        with_missing = dict(outward)
+        for index in missing:
+            normal = _brep_geometry._face_edit_face_normal(_brep_topology._face_at(face_map, index))
+            with_missing[index] = _edit._dot(normal, direction) > 0
         found.append(
             Plan(
                 direction=direction,
                 low=low,
                 high=high,
                 missing=missing,
-                both_signs=len(signs) == 2,
-                both_signs_with_missing=len(signs_with_missing) == 2,
+                is_end=_closes_an_end(outward, along),
+                is_end_with_missing=_closes_an_end(with_missing, along),
                 spans=tuple(along),
             )
         )
     return found
 
 
+def _closes_an_end(outward: dict, along: list) -> bool:
+    """面(添字 → 外向き法線が n を向くか)を n に沿って並べたとき、一番手前が内向きで一番先が外向きか(間に肉がある端の壁)。"""
+    order = sorted(outward, key=lambda index: along[index - 1][0])
+    return not outward[order[0]] and outward[order[-1]]
+
+
 def applicable(shape: Any, face_indices: Sequence[int]) -> Optional[Plan]:
-    """`offset_faces` が引き伸ばしで作る計画。ちょうど1つの向きで、両向きの面を選び、切り口より先の n に垂直な平面を
-    すべて選んでいるときだけ。それ以外は None(今のオフセットで作る)。"""
+    """`offset_faces` が引き伸ばしで作る計画。ちょうど1つの向きで、端の壁の内面と外面を選び(`Plan.is_end`)、切り口より先の
+    n に垂直な平面をすべて選んでいるときだけ。それ以外は None(今のオフセットで作る)。"""
     normals = _parallel_plane_normals(_brep_topology._face_map(shape), [int(index) for index in face_indices])
     if normals is None or len({_edit._dot(normal, normals[0]) > 0 for normal in normals}) != 2:
         return None
@@ -144,7 +154,7 @@ def _parallel_plane_normals(face_map: Any, selected: List[int]) -> Optional[List
 
 def suggestion(shape: Any, face_indices: Sequence[int]) -> Optional[str]:
     """今のオフセットで断られた選択に、足せば引き伸ばせる面があれば、それを名指しする言い換え。"""
-    found = [plan for plan in plans(shape, face_indices) if plan.missing and plan.both_signs_with_missing]
+    found = [plan for plan in plans(shape, face_indices) if plan.missing and plan.is_end_with_missing]
     if len(found) != 1:
         return None
     faces = "・".join(str(index) for index in found[0].missing)
@@ -274,7 +284,7 @@ def _the_plan(shape: Any, selected: List[int]) -> Plan:
             f"faces {list(plan.missing)} beyond the cut face the move direction but are not selected",
             f"{_HINT}: 切り口より先にある面 {faces} も選ぶ",
         )
-    raise _edit.FaceEditError("the selection has faces of one side only", f"{_HINT}: 端の壁の外面と内面を一緒に選ぶ")
+    raise _edit.FaceEditError("the selection does not close an end wall", f"{_HINT}: 端の壁の外面と内面を一緒に選ぶ")
 
 
 def _measure(shape: Any, face_map: Any, axis: tuple):
@@ -348,7 +358,9 @@ class _Ruler:
 
     def __init__(self, axis: tuple):
         self.axis = axis
-        self.component = next((k for k in range(3) if abs(abs(axis[k]) - 1.0) < _ANGULAR_TOL), None)
+        self.component = next(
+            (k for k in range(3) if all(abs(axis[j]) < _ALIGNED_TOL for j in range(3) if j != k)), None
+        )
         self.sign = 1.0 if self.component is None or axis[self.component] > 0 else -1.0
         self.rotation = None
         if self.component is None:

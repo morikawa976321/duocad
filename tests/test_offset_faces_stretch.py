@@ -5,12 +5,15 @@ x=20 での断面は、外形 30×20 から内側 26×18 を引いた 132 mm²�
 """
 from __future__ import annotations
 
+import math
+
 import pytest
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeWedge
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeWedge
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.gp import gp_Pnt
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf
 
 import duocad.verbs as verbs
 from duocad import catalog, kernel_face_edit, kernel_face_stretch, query
@@ -190,6 +193,37 @@ def test_slot_walls_facing_each_other_still_move_along_their_own_normals():
     assert _x_planes(doc, body_id) == pytest.approx([0.0, 16.0, 24.0, 40.0])
 
 
+def test_slot_walls_are_not_an_end_wall_even_when_nothing_flat_lies_beyond():
+    """落ちたら、先端が丸く(先に選んでいない平面が無く)ても、溝の両壁(間が空いている)を端の壁と取り違えて溝ごと動かす。"""
+    rounded_end = BRepAlgoAPI_Fuse(
+        _box(0, 0, 0, 30, 30, 20), BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(30, 15, 0), gp_Dir(0, 0, 1)), 15, 20).Shape()
+    ).Shape()
+    doc, body_id = _document(_unified(BRepAlgoAPI_Cut(_unified(rounded_end), _box(15, -1, 10, 25, 31, 21)).Shape()))
+    walls = [_plane(doc, body_id, 0, 15.0, 1.0), _plane(doc, body_id, 0, 25.0, -1.0)]
+
+    operation = verbs.offset_faces(doc, walls, 1.0, body_id=body_id)
+
+    assert "stretch" not in operation.args
+    assert _x_planes(doc, body_id) == pytest.approx([0.0, 16.0, 24.0])
+
+
+def test_an_end_wall_slightly_off_the_axes_is_stretched():
+    """落ちたら、座標軸からわずかに傾いた向き(0.001°)で、切り口の位置の測り方が食い違い、継ぎ目をまとめられずに断る。"""
+    turn = gp_Trsf()
+    turn.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), math.radians(0.001))
+    shape = BRepBuilderAPI_Transform(_sharp(), turn, True).Shape()
+    faces = query.describe_faces(shape)
+    wall = [
+        next(f["index"] for f in faces if f["kind"] == "plane" and abs(f["center"][0] - x) < 0.01 and f["normal"][0] * sign > 0.999)
+        for x, sign in ((40.0, 1.0), (38.0, -1.0))
+    ]
+
+    final, _ = kernel_face_stretch.stretch(shape, wall, 5.0)
+
+    assert query.volume(final) == pytest.approx(query.volume(shape) + SECTION * 5.0, rel=1e-9)
+    assert _brep_topology.face_count(final) == _brep_topology.face_count(shape)
+
+
 def test_faces_that_cannot_be_stretched_are_refused_by_the_kernel():
     """落ちたら、引き伸ばしの前提(平行な平面・切り口を置ける区間・両向き)が崩れた選択を、記録済みの再生が通してしまう。"""
     doc, body_id = _document(_sharp())
@@ -198,7 +232,7 @@ def test_faces_that_cannot_be_stretched_are_refused_by_the_kernel():
     top = _plane(doc, body_id, 2, 20.0, 1.0)
     with pytest.raises(kernel_face_edit.FaceEditError, match="no prismatic span"):
         kernel_face_stretch.stretch(shape, [outer, top], 5.0)
-    with pytest.raises(kernel_face_edit.FaceEditError, match="faces of one side only"):
+    with pytest.raises(kernel_face_edit.FaceEditError, match="does not close an end wall"):
         kernel_face_stretch.stretch(shape, [outer], 5.0)
     rounded, rounded_id = _document(_wall_ends_low())
     rounded_outer, rounded_inner = _wall(rounded, rounded_id)
