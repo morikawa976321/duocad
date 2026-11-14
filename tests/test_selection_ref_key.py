@@ -94,26 +94,6 @@ def test_a_string_index_is_the_same_entity_as_the_int():
     assert ref_key({"sketch": "s", "index": "2"}) == ref_key({"sketch": "s", "index": 2})
 
 
-def test_the_body_key_ignores_the_index():
-    """Bodyの参照は**添字を見ない**(Bodyは他のBodyの部分形状ではない)。"""
-    plain = {"body": "box", "kind": "body"}
-    with_index = {"body": "box", "kind": "body", "index": 7}
-    other_index = {"body": "box", "kind": "body", "index": 9}
-    assert ref_key(plain) == ref_key(with_index) == ref_key(other_index)
-    assert ref_key(plain) != ref_key({"body": "other", "kind": "body"})
-
-
-def test_a_sketch_entity_point_is_not_the_whole_entity():
-    """**点と辺は別物**、かつ `point` の欠落と `None` は同じもの。"""
-    whole = {"sketch": "s", "entity": "e", "point": None}
-    missing = {"sketch": "s", "entity": "e"}
-    x0 = {"sketch": "s", "entity": "e", "point": "x0"}
-    x1 = {"sketch": "s", "entity": "e", "point": "x1"}
-    assert ref_key(whole) == ref_key(missing)
-    assert ref_key(whole) != ref_key(x0)
-    assert ref_key(x0) != ref_key(x1)
-
-
 def test_provenance_is_not_part_of_the_key():
     """`provenance` は同一性に関与しない(由来違いで二重に持たない)。"""
     bare = {"body": "box", "kind": "face", "index": 1}

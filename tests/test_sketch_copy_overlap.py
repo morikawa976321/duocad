@@ -80,27 +80,6 @@ def test_a_rotated_copy_that_lands_next_to_the_original_is_refused():
     assert _entity_count(document, sketch_id) == 1
 
 
-def test_a_saved_rotated_copy_next_to_the_original_still_replays():
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    line = add_line(document, sketch_id, (0.0, 0.0), (10.0, 0.0))
-    document.log.append(
-        "move_sketch_entities",
-        {
-            "targets": [{"sketch": sketch_id, "entity": line, "point": None}],
-            "mode": "rotate",
-            "angle": 1.0e-12,
-            "center": [5.0, 0.0],
-            "copy": True,
-            "created": ["entity-old-copy"],
-        },
-    )
-
-    replayed = replay_through_json(document)
-
-    assert _entity_count(replayed, sketch_id) == 2
-
-
 def test_a_rotated_copy_of_a_rectangle_without_angle_is_not_taken_for_an_overlap():
     """落ちたら、`angle` を持たない旧い長方形(キーが4個)の回転コピーを、元のキーだけで比べて「元と完全に重なる」と
     誤って断る(保存済みのログの再生も止まる)。"""

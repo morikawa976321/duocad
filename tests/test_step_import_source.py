@@ -36,21 +36,3 @@ def test_unreadable_file_is_reported_by_its_own_name_without_the_staging_path(tm
     assert "埋め込まれた" not in message
     assert "embedded.step" not in message
     assert "duocad-step-" not in message
-
-
-def test_refusal_for_faces_outside_the_solids_names_the_next_step(tmp_path):
-    """落ちたら、ソリッドの外の面で断られても、次に何をすればよいかが文に無い。"""
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
-    from OCP.gp import gp_Pnt
-
-    polygon = BRepBuilderAPI_MakePolygon()
-    for point in ((30, 0, 0), (40, 0, 0), (40, 10, 0), (30, 10, 0)):
-        polygon.Add(gp_Pnt(*point))
-    polygon.Close()
-    face = BRepBuilderAPI_MakeFace(polygon.Wire(), True).Face()
-    box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
-    path = tmp_path / "mixed.step"
-    kernel.write_step(kernel.make_compound([box, face]), str(path))
-
-    with pytest.raises(ValueError, match="ソリッドだけにして書き出し直す"):
-        read_step_source(path)

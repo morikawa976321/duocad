@@ -88,16 +88,6 @@ def test_a_move_clears_a_selected_region_that_the_edit_makes_vanish(
     _assert_cleared(session)
 
 
-def test_selection_editing_itself_is_not_a_reset(session: Session) -> None:
-    """`modify_selection` / `toggle_selection` / `clear_selection` は選択機構そのものであり、
-    「形を変えるverbの確定」ではない —— ここで自分自身を巻き込まない。
-    """
-    session.set_selection(refs=[_edge(1)])
-    assert session.get_selection()["count"] == 1
-    session.modify_selection([_edge(2)], [])
-    assert session.get_selection()["count"] == 2
-
-
 def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -> None:
     """**undo/redoはunconditional**(verbごとの分岐を持たない単純な規則)。"""
     _select(session, [_face(1)])

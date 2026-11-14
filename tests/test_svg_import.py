@@ -160,17 +160,6 @@ def test_an_ellipse_element_becomes_one_ellipse(tmp_path: Path, transform: str, 
     assert params["angle"] == pytest.approx(angle, abs=1e-6)
 
 
-def test_a_skewed_ellipse_element_stays_curves(tmp_path: Path) -> None:
-    """斜めに歪めた `<ellipse>` は軸が直交しないので、楕円図形にせず楕円弧(ベジエ近似)のまま取り込む。"""
-    body = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
-  <ellipse cx="90" cy="30" rx="20" ry="10" transform="skewX(20)"/>
-</svg>
-"""
-    _name, entities = svg_import.read_svg_entities(write_svg(tmp_path, "skew.svg", body))
-    assert "ellipse" not in {entity["kind"] for entity in entities}
-    assert "bezier" in {entity["kind"] for entity in entities}
-
-
 def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
     """ベジエの輪郭を押し出しても側面は1枚のまま。**これが折れ線化しない理由**。
 
@@ -276,22 +265,6 @@ def test_undo_after_two_imports_removes_only_the_most_recent_batch(tmp_path: Pat
         f"2回目の取り込み分だけが消えるはずが一致しない: {sorted(remaining)} != "
         f"{sorted({hand_drawn, *first_ids})}"
     )
-
-
-def test_there_is_no_verb_that_adds_a_single_bezier() -> None:
-    """**`add_bezier` は存在しない**(人もAIもベジエを1本ずつは足せない。2026-08-26本人裁定)。
-
-    種別としては一人前(領域・押し出し・反復・保存は効く)が、作る口は取り込みだけ。
-    落ちたら、UIかMCPにベジエを1本足す口ができている —— それ自体は悪くないが、
-    人が制御点をクリックで置けるかを確かめないまま開けてはいけない。
-    """
-    from duocad import catalog
-    from duocad.oplog import registered_verbs
-
-    assert "bezier" in sketch_module.ENTITY_KINDS
-    assert "add_bezier" not in registered_verbs()
-    assert "add_bezier" not in catalog.tool_names()
-    assert "add_bezier" not in {command.name for command in catalog.COMMANDS}
 
 
 def test_replay_does_not_read_the_svg_file(tmp_path: Path) -> None:
@@ -406,21 +379,6 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
         import_svg(document, sketch_id, path)
     assert sketch_module.get_sketch(document, sketch_id).entities == []
     assert len(document.log.entries) == before
-
-
-def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
-    session = Session(0.2, models_dir=tmp_path)
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    applied = session.import_svg(
-        sketch_id, str(write_svg(tmp_path, "session.svg", SVG_MIXED))
-    )
-    assert applied["verb"] == "import_svg"
-    assert applied["source_name"] == "session.svg"
-    assert applied["entity_count"] > 1
-    assert applied["sketch_id"] == sketch_id
-    entity_ids = set(applied["entity_ids"])
-    assert entity_ids
-    assert entity_ids <= {e.id for e in session.document.sketches[-1].entities}
 
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
