@@ -30,17 +30,19 @@ from . import (
 )
 from .autosave import Autosave
 from .workspace import CommandState, NoCommand, Workspace, merge_args, shape_ref_bodies, stageable, stageable_verb_names
+from . import document_snapshot
 from .document import Document
 from .document_store import DocumentStore, _RESERVED_WINDOWS_NAMES
 from .entry import entries, entry_for, preview_fallback_for
 from .measure import inspect_selection, measure_selection
-from .oplog import OpLog
+from .oplog import OpLog, verb_handler
 from .optimization import Optimization, OptimizationResults
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
 from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
 from .verbs.mirror_sketch import mirrored_entities
+from .verbs._common import HYDRATORS, SNAPSHOTS
 from .view import DocumentView
 
 from . import (
@@ -175,6 +177,10 @@ class Session:
         #: (issue #102)。ファイル名では足りない: 新規→新規・A→B→A・同名の開き直しで名前が一致する。
         self._generation = 0
         self.autosaver = Autosave(self.store)
+        #: 今の文書を作るのにかかった時間の見積もり[秒](ログの再生・読んだスナップショットが持っていた値・以後の `apply` の合計)。
+        #: `document_snapshot.MIN_BUILD_SECONDS` 以上なら、自動保存のたびに再生結果も預ける(小さな文書には作らない)。
+        self._build_seconds = 0.0
+        self._snapshot_memo = document_snapshot.Memo()
         #: 配りもの。文書を差し替えたら `view.reset()` を呼ぶ(`_replace_document`)。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
@@ -884,7 +890,11 @@ class Session:
             )
         staged = self._staged_shapes()
         redo_before = self.document.log.redo_count
-        return self._after_logged_verb(function(self.document, **(args or {})), staged, redo_before)
+        started = time.perf_counter()
+        extra = function(self.document, **(args or {}))
+        # プレビューが先に計算した結果を確定が使い回すので、ここは再生の費用より小さく出る(足りない分は、次に開いたときの再生で測り直される)。
+        self._build_seconds += time.perf_counter() - started
+        return self._after_logged_verb(extra, staged, redo_before)
 
     def _after_logged_verb(self, extra: Optional[dict] = None, staged: Optional[dict] = None, redo_before: int = 0) -> dict:
         """直前にログへ積まれたverbについて変更イベントを発火する。`staged` / `redo_before` は適用の前に控えた値
@@ -1232,8 +1242,11 @@ class Session:
             )
         created = self._created if name is None else time.time()
         payload = self.document.log.to_file_chunks(created=created)
+        snapshot = self._capture_snapshot()
         with self.autosaver.locked():
             self.store.write_document_file(target, payload)
+            if snapshot is not None:
+                self.store.write_snapshot(target, snapshot)
             if name is not None:
                 # 同じ名前の古い文書(外で消された)の絵が残っていれば、それはこの文書の絵ではない。
                 self.store.drop_thumbnail(target)
@@ -1272,7 +1285,7 @@ class Session:
             if self._current_name is None:
                 self.save_document(self.store.unused_untitled_name(), autosave_untitled=True)
             elif self.autosaver.background_active:
-                self.autosaver.save_current(self._current_name, self.document.log, self._created)
+                self.autosaver.save_current(self._current_name, self.document.log, self._created, self._capture_snapshot())
             else:
                 self.save_document()
         except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ画面へ出す
@@ -1333,24 +1346,94 @@ class Session:
         kept = self.optimization_results.take_document(source.name)
         if kept is not None:
             return self._open_undelivered(source.name, kept)
-        payload = self.store.read_document_file(source)
+        payload, digest = self.store.read_document_file_with_digest(source)
         log = OpLog.from_payload(payload)
-        document = Document()
-        # 束ねてから再生する(逆だと `set_parameter` を含むログで落ちる。パラメータの再生は `document.log` を頭から読むので、
-        # 再生中の文書が自分のログを持っていないと成立しない。`parameters.rebuild` が理由つきで拒否する)。
-        document.log = log
-        log.replay(document)
+        restored = self.store.read_snapshot(source, digest, len(log.entries))
+        document = None
+        if restored is not None:
+            try:
+                document = self._document_from_snapshot(log, restored)
+                build_seconds = restored.build_seconds
+            except Exception:  # noqa: BLE001 - 読めたのに組み立てられないスナップショットは捨てて、再生で開く
+                self.store.drop_snapshot(source)
+                self.store.snapshot_failures += 1
+                restored = None
+        if document is None:
+            document = Document()
+            # 束ねてから再生する(逆だと `set_parameter` を含むログで落ちる。パラメータの再生は `document.log` を頭から読むので、
+            # 再生中の文書が自分のログを持っていないと成立しない。`parameters.rebuild` が理由つきで拒否する)。
+            document.log = log
+            started = time.perf_counter()
+            log.replay(document)
+            build_seconds = time.perf_counter() - started
 
         # 開けたものが編集中のファイルになる。再生が落ちたときはここまで来ないので現在名も差し替わらない。
         self._replace_document(
             document, current_name=source.name, created=OpLog.created_of(payload)
         )
+        self._build_seconds = build_seconds
+        if restored is not None:
+            self._register_history_hydrator(document, len(log.entries))
+        elif build_seconds >= document_snapshot.MIN_BUILD_SECONDS:
+            self._write_snapshot_after_replay(source, digest)
         return self._emit({
             "change": "document",
             "action": "open",
             "path": str(source),
             "name": source.name,
         })
+
+    def _document_from_snapshot(self, log: OpLog, restored: "document_snapshot.Restored") -> Document:
+        """再生せずに、スナップショットの写しから文書を組み立てる(`open_document`)。選択・表示は再生した文書と同じ初期値。"""
+        document = Document()
+        document.log = log
+        document.bodies.extend(restored.bodies)
+        document.sketches.extend(restored.sketches)
+        document.parameters.update(restored.parameters)
+        vars(document.optimize).update(restored.optimize)
+        for kind, number in restored.numbering.items():
+            log.note_number(kind, number)
+        return document
+
+    def _register_history_hydrator(self, document: Document, floor: int) -> None:
+        """再生せずに開いた文書の undo 用の「操作前の形」(`verbs/_common.SNAPSHOTS`)を、最初に要った時点で作る。
+
+        `floor` までの操作が開く前の履歴で、それより後はこの文書で掛けた操作(自分の表を持っている)。
+        ログの先頭から `floor` までを新しい文書へ再生し、できた表のうち、まだ無い鍵だけを今の文書へ足す
+        (今の文書の表が新しい)。再生と同じ費用が、その最初の1回の undo にだけ掛かる。
+        """
+        log = document.log
+
+        def hydrate(target: Document) -> None:
+            fresh = Document()
+            fresh.log = log
+            for operation in log.entries:
+                if operation.seq > floor:
+                    break
+                verb_handler(operation.verb).do(fresh, operation)
+            mine = SNAPSHOTS.setdefault(target, {})
+            for key, value in SNAPSHOTS.get(fresh, {}).items():
+                mine.setdefault(key, value)
+
+        HYDRATORS[document] = hydrate
+
+    def _capture_snapshot(self) -> Optional["document_snapshot.Captured"]:
+        """自動保存と一緒に預ける再生結果の写し(再生に時間がかかる文書だけ。無ければ None)。写せなくても保存は成功のまま。"""
+        if not self._open or self._build_seconds < document_snapshot.MIN_BUILD_SECONDS:
+            return None
+        try:
+            return document_snapshot.capture(self.document, memo=self._snapshot_memo, build_seconds=self._build_seconds)
+        except Exception:  # noqa: BLE001 - 派生物。写せない文書は次も再生で開く
+            self.store.snapshot_failures += 1
+            return None
+
+    def _write_snapshot_after_replay(self, source: Path, file_sha256: str) -> None:
+        """再生で開いた文書(開いた時点の状態はファイルと同じ)の再生結果を預ける。次に開くときは再生しない。"""
+        captured = self._capture_snapshot()
+        if captured is None:
+            return
+        with self.autosaver.locked():
+            self.store.write_snapshot(source, captured, file_sha256=file_sha256)
 
     def _open_undelivered(self, name: str, kept: tuple[Document, Optional[float]]) -> dict:
         """ファイルへ書けなかった最適化の結果入りの文書を開き、もう一度書く。開いた時点で今の文書になるので手放す。"""
@@ -1434,6 +1517,8 @@ class Session:
         self._current_name = current_name
         self._created = created
         self.autosaver.mark_saved()  # 開いた/空にした文書に、書けなかった変更は無い
+        self._build_seconds = 0.0  # 開く側(`open_document`)が、再生にかかった時間で上書きする
+        self._snapshot_memo = document_snapshot.Memo()
         # キャッシュの破棄は `view` の1呼び出し(とくに版の数え上げを消さない理由は `DocumentView.reset` の docstring)。
         self.view.reset(document)
         self._applied_count += 1
@@ -1469,7 +1554,8 @@ class Session:
         # 書けなかった結果も一緒に捨てる(残すと、同じ名前で作り直したファイルを開いたときに出てくる)。
         self.optimization_results.discard(target.name)
         self.store.drop_thumbnail(target)
-        deleted = {"action": "delete", "path": str(target), "name": target.name}
+        self.store.drop_snapshot(target)
+        deleted ={"action": "delete", "path": str(target), "name": target.name}
         if target.name == self._current_name:
             # 書き直さずに閉じる(`_save_before_leaving` を通すと、消したファイルを未保存の中身で作り直す)。
             self._close_without_saving()

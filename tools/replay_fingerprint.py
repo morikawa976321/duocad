@@ -2,6 +2,10 @@
 
     .venv/Scripts/python.exe -X utf8 tools/replay_fingerprint.py --out <json> <文書のフォルダ or .json> ...
     .venv/Scripts/python.exe -X utf8 tools/replay_fingerprint.py --compare <前.json> <後.json>
+    .venv/Scripts/python.exe -X utf8 tools/replay_fingerprint.py --snapshot --out <json> <文書のフォルダ or .json> ...
+
+`--snapshot` は、再生で開いた形と、そのスナップショット(`duocad/document_snapshot.py`)から再生せずに開いた形の指紋が
+文書ごとに一致するかをその場で照合する(閾値を 0 にして全文書にスナップショットを作らせる)。1件でも違えば終了コード 1。
 
 形状演算の書き方を変える前後で同じ文書の群を再生し、指紋が一致することを確かめる(操作ログは面・辺の添字で対象を指すので、
 添字の並びが変わると後の操作が別の面に掛かる)。文書は一時フォルダへ写してから開く(元のファイルには書かない)。
@@ -70,6 +74,33 @@ def fingerprint(path: Path, workdir: Path) -> dict:
     }
 
 
+def snapshot_check(path: Path, workdir: Path) -> dict:
+    """再生で開いた指紋と、スナップショットから開いた指紋を並べる(`--snapshot`)。"""
+    from duocad import document_snapshot
+
+    document_snapshot.MIN_BUILD_SECONDS = 0.0
+    shutil.copy(path, workdir / path.name)
+    replayed = fingerprint(path, workdir)  # 再生で開き、スナップショットを書く
+    if "error" in replayed:
+        return {"replayed": replayed, "snapshot": None, "same": True}
+    session = Session(kernel.DEFAULT_DEVIATION, models_dir=workdir, opened=False)
+    t0 = time.perf_counter()
+    session.open_document(path.name)
+    elapsed = (time.perf_counter() - t0) * 1000.0
+    from duocad.verbs._common import HYDRATORS
+
+    from_snapshot = session.document in HYDRATORS
+    bodies = [body_fingerprint(body) for body in session.document.bodies if body.shape is not None or body.mesh is not None]
+    strip = lambda items: [{k: v for k, v in b.items() if k != "detail"} for b in items]
+    same = from_snapshot and strip(bodies) == strip(replayed["bodies"])
+    return {
+        "replayed_ms": replayed["open_ms"],
+        "snapshot_ms": round(elapsed, 1),
+        "from_snapshot": from_snapshot,
+        "same": bool(same),
+    }
+
+
 def collect(paths: list) -> list:
     out = []
     for raw in paths:
@@ -113,11 +144,29 @@ def main() -> None:
     ap.add_argument("paths", nargs="*")
     ap.add_argument("--out", type=Path)
     ap.add_argument("--compare", nargs=2, type=Path)
+    ap.add_argument("--snapshot", action="store_true")
     args = ap.parse_args()
     if args.compare:
         sys.exit(compare(*args.compare))
     documents = {}
     workdir = Path(tempfile.mkdtemp(prefix="duocad-replay-"))
+    if args.snapshot:
+        differ = 0
+        try:
+            for path in collect(args.paths):
+                shutil.rmtree(workdir / ".snapshots", ignore_errors=True)
+                result = snapshot_check(path, workdir)
+                documents[str(path)] = result
+                flag = "ok    " if result["same"] else "DIFFER"
+                differ += 0 if result["same"] else 1
+                print(f"{flag} {path.name}: replay {result.get('replayed_ms')} ms -> snapshot {result.get('snapshot_ms')} ms", flush=True)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps({"documents": documents}, ensure_ascii=False), encoding="utf-8")
+        print(f"{len(documents)} documents, {differ} differ")
+        sys.exit(1 if differ else 0)
     try:
         for path in collect(args.paths):
             documents[str(path)] = fingerprint(path, workdir)
