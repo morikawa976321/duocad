@@ -85,6 +85,106 @@ def version_info(cwd: Path = REPO_ROOT) -> dict:
     return {"commit": commit, "date": date}
 
 
+def probe_updates(repo_root: Path = REPO_ROOT, branch: str = UPDATE_BRANCH, *, fetch_timeout: float = 60.0) -> dict:
+    """`origin/<branch>` に取り込めるコミットがあるか(`state`: current / available / blocked / unknown)。
+
+    画面の更新ボタンと、起動口の起動時の更新(`launcher.py`)が同じ判定を使う。"""
+    current = version_info(repo_root)
+    base = {"current": current, "behind": 0, "commits": []}
+    try:
+        head = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo_root)
+        if head.returncode == 0 and head.stdout.strip() != branch:
+            # 開発用チェックアウトで `--channel stable` を立てた場合など。止めないと update.ps1 が開発中の作業ツリーを再起動する。
+            return {
+                **base,
+                "state": "blocked",
+                "reason": f"{branch} 以外の枝({head.stdout.strip()})にいる",
+            }
+        dirty = _git("status", "--porcelain", "--untracked-files=no", cwd=repo_root)
+        if dirty.returncode != 0:
+            return {**base, "state": "unknown", "reason": dirty.stderr.strip() or "git status に失敗"}
+        if dirty.stdout.strip():
+            # 取り込みで潰さない(update.ps1 も同じ検査で止まる)。
+            return {**base, "state": "blocked", "reason": "安定版のフォルダに未コミットの変更がある"}
+        fetch = _git("fetch", "--quiet", "origin", branch, timeout=fetch_timeout, cwd=repo_root)
+        if fetch.returncode != 0:
+            return {**base, "state": "unknown", "reason": fetch.stderr.strip() or "git fetch に失敗"}
+        remote = f"origin/{branch}"
+        ancestor = _git("merge-base", "--is-ancestor", "HEAD", remote, cwd=repo_root)
+        if ancestor.returncode != 0:
+            # developのコミットから導入した場合(install.ps1 -Commit)。mainにだけあるのがマージコミットだけなら取り込むものは無い。
+            only_main = _git(
+                "rev-list", "--count", "--no-merges", f"HEAD..{remote}", cwd=repo_root
+            )
+            if only_main.returncode == 0 and only_main.stdout.strip() == "0":
+                return {**base, "state": "current"}
+            return {**base, "state": "blocked", "reason": f"HEAD と {remote} が分岐している(早送りできない)"}
+        log = _git(
+            "log", f"--max-count={MAX_LISTED_COMMITS}", "--format=%s", f"HEAD..{remote}",
+            cwd=repo_root,
+        )
+        count = _git("rev-list", "--count", f"HEAD..{remote}", cwd=repo_root)
+    except (OSError, subprocess.SubprocessError) as error:
+        return {**base, "state": "unknown", "reason": str(error)}
+    behind = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
+    commits = [line for line in log.stdout.splitlines() if line.strip()]
+    return {
+        **base,
+        "state": "available" if behind > 0 else "current",
+        "behind": behind,
+        "commits": commits,
+    }
+
+
+def spawn_update_script(
+    *,
+    repo_root: Path,
+    branch: str,
+    log_dir: Path,
+    relaunch: dict,
+    gpu: bool = False,
+    auto: bool = False,
+) -> Optional[str]:
+    """`update.ps1` を切り離して起動する。起動できなければ理由を返す(成功は None)。
+
+    スクリプトはこのプロセスの終了を待ってから取り込む。`auto` は起動口が起動時に起こした更新で、
+    立て直しで窓も開く(画面から押した更新は、開いている窓が再接続を待つので開かない)。
+    """
+    script = repo_root / "tools" / "stable" / "update.ps1"
+    if not script.exists():
+        return f"{script} が無い"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    # **更新でスクリプト自身が書き換わる**ので、一時フォルダへ写してから走らせる。
+    runner = Path(tempfile.gettempdir()) / f"duocad-update-{os.getpid()}.ps1"
+    shutil.copyfile(script, runner)
+    command = [
+        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner),
+        "-RepoRoot", str(repo_root),
+        "-Branch", branch,
+        "-ServerPid", str(os.getpid()),
+        "-LogDir", str(log_dir),
+        "-Channel", str(relaunch["channel"]),
+        "-Port", str(relaunch["port"]),
+        "-HttpPort", str(relaunch["http_port"]),
+        "-DataDir", str(relaunch["data_dir"]),
+        *(["-InstallGpu"] if gpu else []),
+        *(["-Auto"] if auto else []),
+    ]
+    # CREATE_NO_WINDOW: DETACHED_PROCESS にするとスクリプトが呼ぶ git / uv / npm が自分の窓を開く。
+    # Windowsの子プロセスは親が終わっても残るので、切り離しはこれで足りる。
+    subprocess.Popen(
+        command,
+        cwd=str(repo_root),
+        env={k: v for k, v in os.environ.items() if k.upper() not in _INHERITED_PYTHON_ENV},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=_NO_WINDOW | _NEW_GROUP,
+        close_fds=True,
+    )
+    return None
+
+
 class StableUpdater:
     """安定版の更新状態を答え、更新を始める。`WebHandler`(`/api/update`)から呼ばれる。
 
@@ -128,51 +228,7 @@ class StableUpdater:
         return payload
 
     def _probe(self) -> dict:
-        current = version_info(self.repo_root)
-        base = {"current": current, "behind": 0, "commits": []}
-        try:
-            branch = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo_root)
-            if branch.returncode == 0 and branch.stdout.strip() != self.branch:
-                # 開発用チェックアウトで `--channel stable` を立てた場合など。止めないと update.ps1 が開発中の作業ツリーを再起動する。
-                return {
-                    **base,
-                    "state": "blocked",
-                    "reason": f"{self.branch} 以外の枝({branch.stdout.strip()})にいる",
-                }
-            dirty = _git("status", "--porcelain", "--untracked-files=no", cwd=self.repo_root)
-            if dirty.returncode != 0:
-                return {**base, "state": "unknown", "reason": dirty.stderr.strip() or "git status に失敗"}
-            if dirty.stdout.strip():
-                # 取り込みで潰さない(update.ps1 も同じ検査で止まる)。
-                return {**base, "state": "blocked", "reason": "安定版のフォルダに未コミットの変更がある"}
-            fetch = _git("fetch", "--quiet", "origin", self.branch, timeout=60.0, cwd=self.repo_root)
-            if fetch.returncode != 0:
-                return {**base, "state": "unknown", "reason": fetch.stderr.strip() or "git fetch に失敗"}
-            remote = f"origin/{self.branch}"
-            ancestor = _git("merge-base", "--is-ancestor", "HEAD", remote, cwd=self.repo_root)
-            if ancestor.returncode != 0:
-                # developのコミットから導入した場合(install.ps1 -Commit)。mainにだけあるのがマージコミットだけなら取り込むものは無い。
-                only_main = _git(
-                    "rev-list", "--count", "--no-merges", f"HEAD..{remote}", cwd=self.repo_root
-                )
-                if only_main.returncode == 0 and only_main.stdout.strip() == "0":
-                    return {**base, "state": "current"}
-                return {**base, "state": "blocked", "reason": f"HEAD と {remote} が分岐している(早送りできない)"}
-            log = _git(
-                "log", f"--max-count={MAX_LISTED_COMMITS}", "--format=%s", f"HEAD..{remote}",
-                cwd=self.repo_root,
-            )
-            count = _git("rev-list", "--count", f"HEAD..{remote}", cwd=self.repo_root)
-        except (OSError, subprocess.SubprocessError) as error:
-            return {**base, "state": "unknown", "reason": str(error)}
-        behind = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
-        commits = [line for line in log.stdout.splitlines() if line.strip()]
-        return {
-            **base,
-            "state": "available" if behind > 0 else "current",
-            "behind": behind,
-            "commits": commits,
-        }
+        return probe_updates(self.repo_root, self.branch)
 
     def _last_result(self) -> Optional[dict]:
         try:
@@ -209,37 +265,12 @@ class StableUpdater:
                 return 503, {"error": f"サーバの状態を確かめられなかった: {error!r}"}
             if reason is not None:
                 return 409, {"error": reason}
-            script = self.repo_root / "tools" / "stable" / "update.ps1"
-            if not script.exists():
-                return 500, {"error": f"{script} が無い"}
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            # **更新でスクリプト自身が書き換わる**ので、一時フォルダへ写してから走らせる。
-            runner = Path(tempfile.gettempdir()) / f"duocad-update-{os.getpid()}.ps1"
-            shutil.copyfile(script, runner)
-            command = [
-                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner),
-                "-RepoRoot", str(self.repo_root),
-                "-Branch", self.branch,
-                "-ServerPid", str(os.getpid()),
-                "-LogDir", str(self.log_dir),
-                "-Channel", str(self.relaunch["channel"]),
-                "-Port", str(self.relaunch["port"]),
-                "-HttpPort", str(self.relaunch["http_port"]),
-                "-DataDir", str(self.relaunch["data_dir"]),
-                *(["-InstallGpu"] if mode == "gpu" else []),
-            ]
-            # CREATE_NO_WINDOW: DETACHED_PROCESS にするとスクリプトが呼ぶ git / uv / npm が自分の窓を開く。
-            # Windowsの子プロセスは親が終わっても残るので、切り離しはこれで足りる。
-            subprocess.Popen(
-                command,
-                cwd=str(self.repo_root),
-                env={k: v for k, v in os.environ.items() if k.upper() not in _INHERITED_PYTHON_ENV},
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=_NO_WINDOW | _NEW_GROUP,
-                close_fds=True,
+            error = spawn_update_script(
+                repo_root=self.repo_root, branch=self.branch, log_dir=self.log_dir, relaunch=self.relaunch,
+                gpu=mode == "gpu",
             )
+            if error is not None:
+                return 500, {"error": error}
             self._started = True
         self.on_started()
         return 202, {"started": True}

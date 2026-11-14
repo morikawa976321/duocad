@@ -44,6 +44,8 @@ def quiet(monkeypatch):
     monkeypatch.setattr(launcher, "_alert", alerts.append)
     monkeypatch.setattr(launcher, "_single_launch", lambda *a, **k: contextlib.nullcontext(True))
     monkeypatch.setattr(launcher.time, "sleep", lambda _s: None)
+    # 本物のリポジトリへ `git fetch` を打たない。更新の起動は専用のテストで確かめる。
+    monkeypatch.setattr(launcher, "update_before_start", lambda *a: False)
     return alerts
 
 
@@ -132,3 +134,94 @@ def test_second_launch_waits_for_the_first_then_goes_on_after_the_timeout():
         thread.join()
     with launcher._single_launch(54321, 1.0) as acquired:
         assert acquired
+
+
+@pytest.fixture
+def stable_win(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    spawned = []
+    monkeypatch.setattr(launcher, "spawn_update_script", lambda **kw: spawned.append(kw))
+    return spawned
+
+
+def _args(*argv):
+    parser_args = ["--data-dir", "D", *argv]
+    captured = {}
+    real = launcher.argparse.ArgumentParser.parse_args
+
+    def capture(self, args=None, namespace=None):
+        captured["ns"] = real(self, args, namespace)
+        raise SystemExit
+
+    launcher.argparse.ArgumentParser.parse_args = capture
+    try:
+        with pytest.raises(SystemExit):
+            launcher.main(parser_args)
+    finally:
+        launcher.argparse.ArgumentParser.parse_args = real
+    return captured["ns"]
+
+
+def test_a_fresh_start_applies_a_pending_update_instead_of_starting_the_server(tmp_path, monkeypatch, stable_win):
+    """落ちたら: 起動口を押しても main の新しい版が入らず、古いまま起動する(自動更新が働かない)。"""
+    monkeypatch.setattr(launcher, "probe_updates", lambda *a, **k: {"state": "available", "behind": 1, "commits": ["x"]})
+    args = _args("--no-window")
+    assert launcher.update_before_start(args, tmp_path) is True
+    (call,) = stable_win
+    assert call["auto"] is True and call["branch"] == "main" and call["log_dir"] == tmp_path / "logs"
+    assert call["relaunch"] == {"channel": "stable", "port": 8775, "http_port": 8776, "data_dir": tmp_path}
+
+
+@pytest.mark.parametrize("state", ["current", "blocked", "unknown"])
+def test_no_update_when_nothing_can_be_taken_in(tmp_path, monkeypatch, stable_win, state):
+    """落ちたら: オフライン・未コミットの変更・分岐のときに更新が走る、または起動が止まる。"""
+    monkeypatch.setattr(launcher, "probe_updates", lambda *a, **k: {"state": state})
+    assert launcher.update_before_start(_args(), tmp_path) is False
+    assert stable_win == []
+
+
+def test_update_check_is_skipped_for_dev_and_for_the_relaunch_after_an_update(tmp_path, monkeypatch, stable_win):
+    """落ちたら: 開発版の起動で開発用チェックアウトが更新される、または更新が失敗した後の立て直しが更新を起こして回り続ける。"""
+    def boom(*a, **k):
+        raise AssertionError("確認してはいけない")
+
+    monkeypatch.setattr(launcher, "probe_updates", boom)
+    assert launcher.update_before_start(_args("--channel", "dev"), tmp_path) is False
+    assert launcher.update_before_start(_args("--no-update-check"), tmp_path) is False
+    assert stable_win == []
+
+
+def test_failing_to_start_the_update_script_still_starts_the_server(tmp_path, monkeypatch):
+    """落ちたら: 更新スクリプトを起こせないだけで、安定版が起動しなくなる。"""
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    monkeypatch.setattr(launcher, "probe_updates", lambda *a, **k: {"state": "available"})
+
+    def fail(**kw):
+        raise OSError("コピーできない")
+
+    monkeypatch.setattr(launcher, "spawn_update_script", fail)
+    assert launcher.update_before_start(_args(), tmp_path) is False
+    monkeypatch.setattr(launcher, "spawn_update_script", lambda **kw: "update.ps1 が無い")
+    assert launcher.update_before_start(_args(), tmp_path) is False
+
+
+def test_launch_ends_without_starting_the_server_once_the_update_script_is_up(tmp_path, monkeypatch):
+    """落ちたら: 更新スクリプトが走っているのに起動口がサーバも立て、更新とぶつかる。"""
+    monkeypatch.setattr(launcher, "_single_launch", lambda *a, **k: contextlib.nullcontext(True))
+    monkeypatch.setattr(launcher, "server_config", lambda _port: None)
+    monkeypatch.setattr(launcher, "update_before_start", lambda *a: True)
+
+    def no_spawn(*a):
+        raise AssertionError("サーバを立ててはいけない")
+
+    monkeypatch.setattr(launcher, "spawn_server", no_spawn)
+    assert launcher.main(["--data-dir", str(tmp_path)]) == 0
+
+
+def test_a_running_server_is_not_checked_for_updates(tmp_path, monkeypatch, quiet):
+    """落ちたら: 立っているサーバ(作業中の文書がある)の上で、起動口を押しただけで更新・再起動が走る。"""
+    monkeypatch.setattr(launcher, "server_config", lambda _port: {"channel": "stable"})
+    monkeypatch.setattr(launcher, "update_before_start", lambda *a: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(launcher, "find_app_window", lambda: 3)
+    monkeypatch.setattr(launcher, "bring_to_front", lambda hwnd: None)
+    assert launcher.main(["--data-dir", str(tmp_path)]) == 0

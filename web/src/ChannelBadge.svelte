@@ -23,6 +23,9 @@
     restored?: boolean
     rollback: boolean
     gpu?: boolean
+    /** 起動口が起動時に起こした更新(窓を開く前に走るので、この窓は結果を待っていない)。 */
+    auto?: boolean
+    at?: string
     from: string
     to: string
     message: string
@@ -75,6 +78,20 @@
     }
   }
 
+  const REPORTED_AUTO_KEY = 'duocad-reported-auto-update'
+
+  /** 起動時の自動更新の結果は、この窓が開く前に出ている。まだ知らせていない分だけ、窓が開いたときに一度知らせる。 */
+  function reportAutoUpdate(result: LastResult | null | undefined): void {
+    if (!result?.auto || !result.at) return
+    try {
+      if (localStorage.getItem(REPORTED_AUTO_KEY) === result.at) return
+      localStorage.setItem(REPORTED_AUTO_KEY, result.at)
+    } catch {
+      return
+    }
+    reportFinishedUpdate(result)
+  }
+
   function startUpdate(): void {
     void restartServer('api/update', {
       title: 'アップデート中…',
@@ -105,6 +122,7 @@
       }
       await refreshStatus(pending)
       if (pending) reportFinishedUpdate(status?.last_result)
+      else reportAutoUpdate(status?.last_result)
       timer = setInterval(() => void refreshStatus(), STATUS_POLL_MS)
       document.addEventListener('visibilitychange', onVisible)
     })()

@@ -3,12 +3,14 @@
 # 画面の「更新」ボタンから duocad/channel.py の StableUpdater が切り離して起動する
 # (一時フォルダへ写したこのファイルを走らせる。取り込みでこのファイル自身が書き換わるため)。
 # 手で巻き戻すときは -Rollback を付けて直接呼ぶ(ServerPid を省くと HttpPort から探して止める)。
+# -Auto は起動口(duocad.launcher)が、サーバを新しく立てる前に更新を見つけて起こしたとき。起動口の終了を待ち、
+# 立て直しで窓も開く(画面から押した更新は、開いている窓が再接続を待つので窓は開かない)。
 # -InstallGpu は取り込みもビルドもせず、GPU の部品(extra gpu)だけを入れて立て直す(画面の「設定」の
 # 「GPU の部品を入れる」。失敗したら extra なしで同期し直して CPU の構成に戻す)。
 #
 # 流れ: サーバの終了を待つ -> origin/<Branch> を早送りで取り込む -> uv sync --frozen
 #       -> (package-lock が変わったか node_modules が無ければ) npm ci -> npm run build
-#       -> duocad.launcher --no-window で立て直す。
+#       -> duocad.launcher --no-update-check(-Auto 以外は --no-window も)で立て直す。
 # 失敗したら元のコミットへ戻して同じ手順で立て直す(結果は LogDir の last-update-result.json)。
 #
 # **このファイルはUTF-8(BOM付き)で保つ。** Windows PowerShell 5.1 はBOM無しのスクリプトを
@@ -106,22 +108,33 @@ function Build([string]$fromCommit) {
 
 function Relaunch {
     $pythonw = Join-Path $RepoRoot '.venv\Scripts\pythonw.exe'
-    Log "== relaunch: $pythonw -m duocad.launcher --no-window"
-    Start-Process -FilePath $pythonw -WorkingDirectory $RepoRoot -ArgumentList @(
-        '-m', 'duocad.launcher', '--no-window',
-        '--channel', $Channel, '--port', "$Port", '--http-port', "$HttpPort", '--data-dir', "`"$DataDir`""
-    )
+    # --no-update-check: 更新が失敗し続けても、立て直しの起動口がまた更新を起こして回り続けないように。
+    $launcherArgs = @('-m', 'duocad.launcher', '--no-update-check')
+    if (-not $Auto) { $launcherArgs += '--no-window' }
+    $launcherArgs += @('--channel', $Channel, '--port', "$Port", '--http-port', "$HttpPort", '--data-dir', "`"$DataDir`"")
+    Log "== relaunch: $pythonw $($launcherArgs -join ' ')"
+    Start-Process -FilePath $pythonw -WorkingDirectory $RepoRoot -ArgumentList $launcherArgs
 }
 
 function Write-Result([bool]$ok, [bool]$restored, [string]$from, [string]$to, [string]$message) {
     $result = [ordered]@{
-        ok = $ok; restored = $restored; rollback = [bool]$Rollback; gpu = [bool]$InstallGpu; from = $from; to = $to
+        ok = $ok; restored = $restored; rollback = [bool]$Rollback; gpu = [bool]$InstallGpu; auto = [bool]$Auto; from = $from; to = $to
         message = $message; log = $log; at = (Get-Date).ToString('o')
     }
     $result | ConvertTo-Json | Set-Content -Path (Join-Path $LogDir 'last-update-result.json') -Encoding UTF8
 }
 
-Log "start: repo=$RepoRoot branch=$Branch rollback=$Rollback gpu=$InstallGpu"
+Log "start: repo=$RepoRoot branch=$Branch rollback=$Rollback gpu=$InstallGpu auto=$Auto"
+
+# 同じポートの更新を1本だけにする。更新の最中にもう一度起動口を押すと、その起動口も更新を見つけて
+# このスクリプトをもう1本起こす(取り込みとビルドが重なる)。後から来た方は何もせずに終わる。
+$updateLock = New-Object System.Threading.Mutex($false, "Local\duocad-update-$HttpPort")
+$locked = $false
+try { $locked = $updateLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
+if (-not $locked) {
+    Log 'another update is already running; exiting'
+    exit 0
+}
 
 # ---- サーバの終了を待つ ----
 if ($ServerPid -eq 0) {
