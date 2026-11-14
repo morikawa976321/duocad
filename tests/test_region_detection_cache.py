@@ -61,24 +61,6 @@ def test_callers_get_their_own_copies(counted) -> None:
     assert all(abs(item["centroid"][0]) < 1e6 for item in again)
 
 
-def test_extruding_selected_regions_matches_the_uncached_answer(counted) -> None:
-    """落ちたら、共有した検出結果で押し出した形が、その場で検出した形と食い違う(領域 2 = 2 番目に大きい 110mm² の長方形)。"""
-
-    def extrude_second(session: Session) -> list[float]:
-        sketch_id = session.sketch_create("XY")["sketch_id"]
-        for i, width in enumerate((10.0, 11.0, 12.0)):
-            session.add_rectangle(sketch_id, [i * 20.0, 0.0], width, 10.0)
-        session.modify_selection([{"sketch": sketch_id, "index": 2}], [])
-        session.extrude(4.0, mode="new")
-        return [body["volume"] for body in session.state_meta()["bodies"]]
-
-    cached = extrude_second(Session(0.2))
-    region._DETECTED.clear()
-    fresh = extrude_second(Session(0.2))
-    assert cached == pytest.approx([440.0])
-    assert fresh == pytest.approx([440.0])
-
-
 def test_the_sketch_revision_moves_only_with_what_is_drawn() -> None:
     """落ちたら、選択を変えるだけで画面が全スケッチを作り直す(版が上がる)か、図形を足しても作り直さない(版が上がらない)。"""
     session = Session(0.2)

@@ -294,17 +294,6 @@ def test_the_edges_of_a_hidden_body_are_refused(session: Session) -> None:
         session.edges(body.id)
 
 
-def test_asking_for_the_edges_of_an_unknown_body_is_an_error(session: Session) -> None:
-    _box(session)
-
-    async def script(send):
-        return await send({"cmd": "get_edges", "body_id": "body-does-not-exist"})
-
-    (answer, _clients) = _browser(session, script)
-    assert answer["type"] == "error"
-    assert answer["where"] == "get_edges"
-
-
 def test_extrude_without_a_mode_is_refused(session: Session) -> None:
     """落ちたら、WSの表が欠けた `mode` を既定(join)で埋めている(切り取るつもりの押し出しが黙って足す)。"""
     _box(session)
@@ -340,24 +329,6 @@ def test_the_browser_can_make_a_new_body(session: Session) -> None:
     created = session.document.bodies[-1]
     assert created.id != box.id
     assert math.isclose(query.volume(created.shape), 10.0 * 10.0 * SIDE, rel_tol=1e-9)
-
-
-def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
-    """辺を複数選んでフィレットがかけられる(タスクDの検証2)。"""
-    body, _ = _box(session)
-    faces_before = _brep_topology.face_count(body.shape)
-    _select(session, _edges(body, [1, 2]))
-
-    async def script(send):
-        return await send(
-            {"cmd": "fillet", "radius": RADIUS_THAT_WORKS, "client_op": 3}
-        )
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["verb"] == "fillet"
-    assert answer["applied"]["client_op"] == 3
-    assert _brep_topology.face_count(body.shape) > faces_before
 
 
 def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:

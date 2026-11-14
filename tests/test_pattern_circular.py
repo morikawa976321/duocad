@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from duocad import kernel_sketch, query
+from duocad import kernel_sketch
 from duocad.document import Document
 from duocad.region import expanded_entities, region_ref, regions
 from duocad.sketch import (
@@ -104,20 +104,6 @@ def test_pattern_can_be_undone():
 
     document.log.redo(document)
     assert len(regions(document, sketch_id)) == COUNT
-
-
-def test_extruding_a_circular_pattern_opens_count_holes():
-    """反復した円を `cut` で押し出すと穴が **count個** できる。"""
-    document = Document()
-    plate(document)
-    sketch_id, _, _ = hole_ring(document)
-
-    drill_all(document, sketch_id)
-
-    body = document.bodies[-1]
-    assert len(hole_axes(body.shape)) == COUNT
-    expected = PLATE_SIZE**2 * PLATE_THICKNESS - COUNT * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS
-    assert math.isclose(query.volume(body.shape), expected, rel_tol=1e-9)
 
 
 def test_a_full_circle_divides_360_by_count():

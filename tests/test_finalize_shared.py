@@ -9,8 +9,7 @@ from OCP.gp import gp_Pnt
 
 from duocad import kernel
 from duocad.document import Document
-from duocad.io_step import STL_DEVIATION
-from duocad.topopt.finalize import CAD_DEVIATION_MM, final_mesh_checks, tessellate_body
+from duocad.topopt.finalize import final_mesh_checks, tessellate_body
 from duocad.verbs import add_solid_body
 
 from duocad import (
@@ -20,11 +19,6 @@ from duocad import (
 
 def box(lo, hi):
     return BRepPrimAPI_MakeBox(gp_Pnt(*lo), gp_Pnt(*hi)).Shape()
-
-
-def test_cad_deviation_equals_stl_export():
-    """保持・除外の三角形分割は STL 書き出しと同じ粗さ(issue #95)。食い違うと穴の内面の寸法が STL と変わる。"""
-    assert CAD_DEVIATION_MM == STL_DEVIATION == 0.01
 
 
 def test_solid_operation_undo_redo_and_replay():

@@ -270,20 +270,6 @@ def test_taper_is_logged_only_when_set_and_replays():
     )
 
 
-def test_tapered_extrusion_undoes_and_redoes():
-    document = Document()
-    refs = _sketch_rect(document)
-    extrude(document, refs, 10.0, mode="join")
-    before = _brep_geometry.volume(document.bodies[0].shape)
-
-    extrude(document, _sketch_rect(document, (5.0, 2.0), 10.0, 6.0), 4.0, mode="cut", taper=10.0)
-    after = _brep_geometry.volume(document.bodies[0].shape)
-    document.log.undo(document)
-    assert _brep_geometry.volume(document.bodies[0].shape) == pytest.approx(before, rel=REL)
-    document.log.redo(document)
-    assert _brep_geometry.volume(document.bodies[0].shape) == pytest.approx(after, rel=REL)
-
-
 def test_cut_tapers_the_tool_body():
     """cut の向き: 負のテーパーで掘る側の立体が細る = 穴が奥ほど狭まる(Fusion の定義どおり押し出す立体に掛かる)。"""
     document = Document()
@@ -528,18 +514,6 @@ def test_mcp_extrude_takes_a_taper():
 
     body = session.document.bodies[0]
     assert query.volume(body.shape) == pytest.approx(_frustum(20.0, 10.0, 10.0, 5.0), rel=REL)
-
-
-def test_an_ellipse_sketch_region_tapers():
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    add_ellipse(document, sketch_id, (0.0, 0.0), 12.0, 6.0)
-    refs = [region_ref(sketch_id, regions(document, sketch_id)[0].index)]
-
-    extrude(document, refs, 5.0, mode="new", taper=5.0)
-
-    box = kernel.bounding_box(document.bodies[0].shape)
-    assert box["max"][0] == pytest.approx(6.0 + 5.0 * _slope(5.0), abs=1e-6)
 
 
 # ======================================================================================

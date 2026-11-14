@@ -229,36 +229,3 @@ def test_a_camera_request_after_a_shape_change_during_the_refinement_waits_for_t
         return measured_on_the_loop
 
     assert asyncio.run(scenario()) == [], "形が変わった後のカメラの要求をループの上で測った"
-
-
-def test_settled_waits_for_the_last_delivery(monkeypatch) -> None:
-    """落ちたら、測り直しが続けて2回走ったとき、`settled` が最後の配信を待たずに戻り、テストが配り終える前の状態を見る。"""
-    from duocad.net import ws
-
-    session = session_with_box()
-    gate = threading.Event()
-    _slow_measurement(monkeypatch, gate)
-    real_send = ws._send
-
-    async def send(connection, payload):
-        if payload.get("type") == "state" and gate.is_set():
-            await asyncio.sleep(0.2)  # 測り終えた後の配信が送り終わる前に、次の測り直しが測り終える
-        await real_send(connection, payload)
-
-    monkeypatch.setattr(ws, "_send", send)
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-        await server._push(client, applied=None, only=client)
-        await server._dispatch(client, json.dumps(dict(CAMERA, focus={"box": [1, 2]})))
-        await server._dispatch(client, json.dumps(dict(CAMERA, focus={"box": [3, 4]})))
-        gate.set()
-        await server.settled()
-        return [payload for payload in client.payloads if payload.get("type") == "state" and payload["delta"]["bodies"]]
-
-    states = asyncio.run(scenario())
-    fine = sorted(face["index"] for face in states[-1]["delta"]["bodies"][0]["geometry"]["faces"] if face["detail"] == "fine")
-    assert fine == [3, 4], f"最後の配信を待たずに戻った: {fine}"

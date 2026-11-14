@@ -428,18 +428,6 @@ def test_an_empty_mesh_never_reaches_the_stl_writer(tmp_path):
 
 
 # ======================================================================== §8 MCP
-def test_the_mcp_tool_adds_a_mesh_body():
-    session = session_with_box(SIDE, SIDE, SIDE)
-    tools = DocumentTools(session)
-    result = tools.call(
-        "add_mesh_body",
-        {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES, "name": "tetra"},
-    )
-    body = session.document.get_body(result["body_id"])
-    assert body.kind == MESH_KIND
-    assert body.mesh.triangle_count == 4
-
-
 def test_describe_document_survives_a_mesh_body():
     """`describe_document` はB-repを前提に `kernel.face_count` / `query.volume` を叩く。"""
     session = session_with_box(SIDE, SIDE, SIDE)

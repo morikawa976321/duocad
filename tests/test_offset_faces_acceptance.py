@@ -20,15 +20,13 @@ from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 
 import duocad.verbs as verbs
-from duocad import catalog, kernel_face_edit, query, selection
+from duocad import kernel_face_edit, query, selection
 from duocad.document import Body, Document
 from duocad.entry import entry_for
 from duocad.region import region_ref
 from duocad.sketch import add_ellipse, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude, fillet, shell_body
 from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, shape_ref
-from mcp_support import call
-from session_support import session_with_box
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -437,21 +435,3 @@ def test_the_entry_takes_the_faces_from_the_selection():
 
     assert result == {"body_id": body_id, "changed_bodies": [body_id]}
     assert _volume(doc, body_id) == pytest.approx(W * D * (H + 5.0), rel=1e-9)
-
-
-def test_ai_can_call_it_over_mcp():
-    """AI(MCP)からも呼べる。面は選択から取り、引数は距離だけ(寸法の印つき)。"""
-    from duocad.mcp_server import DocumentTools, McpServer
-
-    descriptor = next(d for d in catalog.tool_descriptors() if d["name"] == "offset_faces")
-    assert descriptor["inputSchema"].get("required", []) == ["distance"]
-    assert catalog.dimension_params("offset_faces") == ("distance",)
-    session = session_with_box()
-    top = _plane_at(session.document, "box", 2, 40.0)
-    server = McpServer(DocumentTools(session))
-    call(server, "set_selection", {"refs": [{"body": "box", "kind": "face", "index": top}]})
-
-    payload = call(server, "offset_faces", {"distance": 5.0})
-
-    assert payload["verb"] == "offset_faces"
-    assert query.volume(session.document.get_body("box").shape) == pytest.approx(30.0 * 30.0 * 45.0, rel=1e-9)

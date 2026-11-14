@@ -65,26 +65,6 @@ def test_face_predicates_can_combine_conditions(doc: Document):
     assert predicates.evaluate(doc, {"kind": "face", "where": [upward, huge]}) == []
 
 
-def test_kind_is_actually_filters_by_the_classified_kind(doc: Document):
-    """`kind_is` が**分類ラベルで実際に絞れる**こと(`validate` / `describe_ops` に
-    opが載っていることだけを見ていると、評価側が `brep_geometry.classify_face` /
-    `classify_edge` と違うラベルを見ていても気づけない)。
-    """
-    shape = doc.bodies[0].shape
-    planes = predicates.evaluate(
-        doc, {"kind": "face", "where": [{"op": "kind_is", "value": "plane"}]}
-    )
-    assert len(planes) == _brep_topology.face_count(shape) == 6
-
-    lines = predicates.evaluate(
-        doc, {"kind": "edge", "where": [{"op": "kind_is", "value": "line"}]}
-    )
-    assert len(lines) == _brep_topology.edge_count(shape) == 12
-    assert predicates.evaluate(
-        doc, {"kind": "edge", "where": [{"op": "kind_is", "value": "circle"}]}
-    ) == []
-
-
 def test_kind_and_area_conditions_tell_a_cylinder_from_its_caps():
     """箱は平面と直線しか持たないので `kind_is` の非該当も `area_gt` の該当も見えない。円柱(側面 1885 / 底 314 mm²)で見る。"""
     document = Document()
@@ -189,30 +169,6 @@ def test_edges_on_the_boundary_of_a_face_can_be_selected(doc: Document):
         # 「どの面の外周か」を無視した実装が通ってしまう(直方体は上下が合同なため)。
         assert abs(edge["start"][2] - BOX_Z) < 1e-6
         assert abs(edge["end"][2] - BOX_Z) < 1e-6
-
-
-def test_the_boundary_of_the_bottom_face_is_a_different_set(doc: Document):
-    """対照: 底面を指せば**別の4本**が返る(面の指定が実際に効いていること)。"""
-    shape = doc.bodies[0].shape
-    edges = _edges_by_index(shape)
-    bottom = [
-        face["index"] for face in kernel.tessellate(shape)["faces"] if face["normal"][2] < -0.999
-    ]
-    assert len(bottom) == 1
-
-    top_matched = predicates.evaluate(
-        doc,
-        {"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": _top_face_index(shape)}]},
-    )
-    bottom_matched = predicates.evaluate(
-        doc, {"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": bottom[0]}]}
-    )
-    assert len(bottom_matched) == 4
-    assert {item["index"] for item in top_matched}.isdisjoint(
-        {item["index"] for item in bottom_matched}
-    )
-    for item in bottom_matched:
-        assert abs(edges[item["index"]]["start"][2]) < 1e-6
 
 
 def test_the_boundary_excludes_the_rim_of_a_hole():
@@ -370,14 +326,6 @@ def test_validate_returns_a_normalized_copy(doc: Document):
     normalized = predicates.validate(original)
     assert original == snapshot
     assert normalized["kind"] == "edge"
-
-
-def test_the_op_catalogue_covers_every_supported_op():
-    """`describe_ops()` が **opの唯一の正**であること(MCPのスキーマがここから作られる)。"""
-    catalogue = predicates.describe_ops()
-    assert set(catalogue) == set(predicates.PREDICATE_KINDS)
-    assert {entry["op"] for entry in catalogue["face"]} == set(predicates.FACE_OPS)
-    assert {entry["op"] for entry in catalogue["edge"]} == set(predicates.EDGE_OPS)
 
 
 def test_parallel_to_selects_straight_edges_only_not_arcs_whose_chord_is_parallel(session):

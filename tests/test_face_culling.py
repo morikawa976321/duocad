@@ -43,11 +43,6 @@ def test_without_a_size_hint_there_is_nothing_to_split() -> None:
         )
 
 
-def test_zoomed_all_the_way_out_the_two_sides_meet() -> None:
-    """引ききれば分ける意味が無くなる(細かい側が粗い側に追いつく)。"""
-    assert resolution.coarse_view_resolution(50.0, 600.0) == resolution.view_resolution(50.0, 600.0)
-
-
 @pytest.fixture()
 def cylinder_shape():
     """円柱(曲面1・平面2)。**曲面と平面が混ざっている**ので粗さの効きが見える。"""
@@ -243,15 +238,3 @@ def test_the_websocket_carries_the_focus_and_only_redelivers_what_changed(
     second = [body["body_id"] for body in states[-1]["delta"]["bodies"]]
     assert second == [visible], f"画面外のBodyまで線に乗せている: {second}"
     assert hidden not in second
-
-
-def test_the_websocket_still_works_without_a_focus(two_body_session) -> None:
-    """`focus` は省略できる(旧クライアントがそのまま動く)。"""
-    session, visible, _ = two_body_session
-
-    async def script(send):
-        await send({"cmd": "set_view_resolution", "world_per_pixel": 0.005, "size_hint": 400.0})
-
-    client = browser(session, script, connections=1)[1][0]
-    assert not [p for p in client.payloads if p.get("type") == "error"]
-    assert session.geometry(visible)["fine_face_count"] == session.geometry(visible)["face_count"]

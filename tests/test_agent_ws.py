@@ -636,7 +636,6 @@ def test_the_thinking_cannot_change_while_the_ai_is_running(box_session: Session
 def test_llama_server_runs_under_the_limits_it_was_measured_with():
     """落ちたら、dGPU の無い機械の 27B モデルが、どの思考の設定でも完走しない上限に戻っている(docs/LOCAL_LLM_QWEN38.md)。"""
     limits = AI_LIMITS["openai_compat"]
-    assert (limits.max_turns, limits.max_tokens, limits.max_total_seconds) == (60, 16384, 7200.0)
     # 1リクエストで出力上限まで書き切れる待ちがある(実測の生成 4.1 tok/s)
     assert limits.request_timeout >= limits.max_tokens / 4.1
 

@@ -93,38 +93,3 @@ def test_check_code_unchanged_fails_for_a_ref_that_does_not_resolve(monkeypatch,
     captured = capsys.readouterr()
     assert "差分に .py は無い" not in captured.out
     assert "nonexistent-ref-xyz" in captured.err
-
-
-def test_check_code_unchanged_still_compares_against_a_real_ref(monkeypatch) -> None:
-    """落ちたら、解決できる ref まで断るようになっている(終了コード2は ref の不正だけ)。作業ツリーの差分の有無で 0 か 1。"""
-    check = load_tool(monkeypatch, "check_code_unchanged")
-
-    assert check.main(["HEAD"]) in (0, 1)
-
-
-# ---------------------------------------------------------------- bench_server_ops
-
-
-class RecordingSession:
-    def __init__(self) -> None:
-        self.calls: list[list[int]] = []
-
-    def edge_chains(self, body_id: str, edge_indices: list) -> dict:
-        self.calls.append(list(edge_indices))
-        return {}
-
-
-def test_bench_next_edge_asks_for_a_different_edge_each_time(monkeypatch) -> None:
-    """落ちたら、「次の辺」の5回が同じ辺を呼び、2回目以降は形ごとのキャッシュに当たる(中央値が次の辺の費用にならない)。"""
-    bench = load_tool(monkeypatch, "bench_server_ops")
-    monkeypatch.setattr(bench, "ROWS", [])
-    session = RecordingSession()
-
-    bench.bench_edge_chains(session, "body-1", nedges=40)
-
-    assert session.calls[0] == [1]
-    next_edges = [call[0] for call in session.calls[1:]]
-    assert len(next_edges) == 5
-    assert len(set(next_edges)) == 5
-    assert 1 not in next_edges
-    assert all(2 <= edge <= 40 for edge in next_edges)

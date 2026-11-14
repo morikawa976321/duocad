@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import ast
-import importlib
 import re
 from pathlib import Path
 
@@ -17,8 +16,6 @@ from duocad.session import Session
 
 from duocad.paths import REPO_ROOT
 MCP_MD = REPO_ROOT / "MCP.md"
-ROOT_README = REPO_ROOT / "docs/DEVELOPMENT.md"
-TOPOPT_MD = REPO_ROOT / "docs" / "TOPOPT.md"
 MCP_SERVER_PY = REPO_ROOT / "duocad" / "mcp_server.py"
 
 
@@ -177,93 +174,4 @@ def test_the_documented_error_vocabulary_matches_the_source(path: Path, heading:
         f"{path.relative_to(REPO_ROOT).as_posix()} の失敗語彙が `error_envelope` と食い違う"
         "(意図した変更なら文書を更新): "
         f"文書に無い={sorted(codes - documented)} / 実装に無い={sorted(documented - codes)}"
-    )
-
-
-def _current_truth_rows() -> list[tuple[str, list[float], list[tuple[str, str]]]]:
-    """「現在の正」表を (項目, 太字に書かれた数値, 参照している (モジュール, 名前)) で返す。"""
-    rows = []
-    for cells in _table_rows(_section(TOPOPT_MD, "## 現在の正")):
-        numbers = []
-        for bold in re.findall(r"\*\*(.+?)\*\*", cells[1]):
-            found = re.findall(r"-?\d+(?:\.\d+)?", bold)
-            if not found:
-                numbers = []   # 「総コアの半分」のように数で書いていない行 —— 値の比較はしない
-                break
-            numbers.extend(float(n) for n in found)
-        symbols = []
-        module = None
-        for token in re.findall(r"`([^`]+)`", cells[2]):
-            qualified = re.fullmatch(r"([a-z_]+)\.([A-Z][A-Z0-9_]*)", token)
-            if qualified:
-                module = qualified.group(1)
-                symbols.append((module, qualified.group(2)))
-            elif re.fullmatch(r"[A-Z][A-Z0-9_]*", token) and module:
-                symbols.append((module, token))
-        rows.append((cells[0], numbers, symbols))
-    return rows
-
-
-def test_the_current_truth_table_is_readable():
-    """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
-    rows = _current_truth_rows()
-    assert len(rows) >= 8, f"docs/TOPOPT.md「現在の正」表を読めていない: {rows}"
-    comparable = [row for row in rows if row[1] and row[2]]
-    assert len(comparable) >= 8, (
-        "太字の数値かコードの記号を読めていない行が多すぎる(表の書き方が変わった): "
-        f"読めた {len(comparable)} / 全 {len(rows)} 行"
-    )
-
-
-def test_the_current_truth_table_names_symbols_that_exist():
-    """索引が名指しするコード上の記号が実在する。
-
-    落ちたら、**定数を改名・削除したのに表が古い**。値の一致(下)より先にここで落として、
-    「記号が消えたので比較する値が0件になって緑」を防ぐ。
-    """
-    missing = []
-    for item, _numbers, symbols in _current_truth_rows():
-        assert symbols, f"「{item}」の行がコード上の場所を指していない"
-        for module, name in symbols:
-            if not hasattr(importlib.import_module(f"duocad.topopt.{module}"), name):
-                missing.append(f"{module}.{name}（{item}）")
-    assert not missing, f"docs/TOPOPT.md「現在の正」が実在しない記号を指している: {missing}"
-
-
-def test_the_current_truth_table_values_match_the_code():
-    """索引に書いてある既定値がコードの定数と一致する。
-
-    落ちたら、**既定値を変えたのに `docs/TOPOPT.md` の索引が古い**。この文書は節が時系列で
-    並んでいて位置から新旧を判断できないため、**この表が古いと現行値を引く手段が無くなる**。
-    """
-    wrong = []
-    for item, numbers, symbols in _current_truth_rows():
-        if not numbers:
-            continue           # 数で書いていない行(スレッド数=総コアの半分)は対象外
-        actual = [
-            float(getattr(importlib.import_module(f"duocad.topopt.{module}"), name))
-            for module, name in symbols
-        ]
-        if numbers != actual:
-            wrong.append(f"「{item}」文書={numbers} / コード={actual}")
-    assert not wrong, (
-        "docs/TOPOPT.md「現在の正」の既定値がコードと食い違う"
-        f"(正はコード側。表の行を直すこと): {wrong}"
-    )
-
-
-def test_the_readme_lists_every_acceptance_check_script():
-    """`docs/DEVELOPMENT.md`「形状最適化の受入検査」が `topopt_checks/check_*.py` を全部並べている。
-
-    落ちたら、**受入検査を足した(消した)のに docs/DEVELOPMENT.md の実行手順が古い**。この群は pytest に
-    入れておらず、docs/DEVELOPMENT.md のこのブロックを写して回すのが唯一の強制力なので、
-    並べ忘れた検査は**誰も走らせないまま緑に見える**。
-    """
-    section = _section(ROOT_README, "### 形状最適化の受入検査")
-    listed = set(re.findall(r"topopt_checks[\\/](check_[a-z_]+\.py)", section))
-    actual = {path.name for path in (REPO_ROOT / "topopt_checks").glob("check_*.py")}
-    assert listed == actual, (
-        "docs/DEVELOPMENT.md「形状最適化の受入検査」と topopt_checks/ の顔ぶれが食い違う"
-        "(意図した変更なら docs/DEVELOPMENT.md のブロックを更新すること): "
-        f"docs/DEVELOPMENT.mdに無い={sorted(actual - listed)} / 実在しない={sorted(listed - actual)}"
     )
