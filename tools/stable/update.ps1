@@ -26,7 +26,8 @@ param(
     [int]$HttpPort = 8776,
     [Parameter(Mandatory = $true)][string]$DataDir,
     [switch]$Rollback,
-    [switch]$InstallGpu
+    [switch]$InstallGpu,
+    [switch]$Auto
 )
 
 $ErrorActionPreference = 'Stop'
