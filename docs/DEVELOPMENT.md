@@ -197,6 +197,9 @@ Vite の開発サーバは設定 JSON も HTTP プロキシも持たず、別オ
   名指ししたときは直列（ワーカーの立ち上げに毎回約10秒かかり、1ファイルなら直列の方が速い）。ワーカー数は `tests/conftest.py` の
   `WORKERS_FOR_THE_WHOLE_SUITE`、その場で変えるなら `-n 8` / `-n 0`。`pytest-xdist` の入っていない `.venv` では `-n` を読めずに
   止まるので、`uv sync --frozen --extra gpu` で入れる。
+- **`tests/topopt/` や `topopt_checks/_fixtures.py` を import する検査**は optional の build123d が要る。
+  `uv sync --frozen --extra fixtures`（`pyproject.toml`。本番の `duocad/` には入れない）。既定の `pytest -q` は build123d が
+  無くても集まって走る（`tests/` 直下は OCP の `BRepPrimAPI_*` で形を組む）。
 - **形状最適化だけを守るテスト（`tests/topopt/`）は既定では集めない**（開発も製品での公開も凍結中。2026-10-24 本人指示）。
   集めるなら `--topopt`。`tests/topopt/` の中を名指ししたときも集まる。凍結中も製品が使う部分（条件入りの文書の保存と配信、
   干渉チェックが使う `tessellate_body`、安定版で隠れること）は `tests/` 側に残してある。
@@ -360,7 +363,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py`・そこから切り出した `kernel_*.py`・共通層 `brep_*.py` と `mesh_geometry.py`。免除の一覧の正は `tests/test_boundaries.py` の `OCP_ALLOWED`）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py`・そこから切り出した `kernel_*.py`・共通層 `brep_*.py` と `mesh_geometry.py`。免除の一覧の正は `tests/test_boundaries.py` の `OCP_ALLOWED`）と `topopt/voxelize.py` だけ。`build123d` は import しない。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 `topopt/`・`optimize_steps.py`・`optimize_voxels.py` は実行器 `optimize_run` と文書アダプター `optimize_acceptance` を import しない。
 
@@ -377,8 +380,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 | `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と入口） | ✗ | ✗ |
 | `duocad/entry.py` | verbの入口の登録表（`@entry`） | ✗ | ✗ |
 | `duocad/catalog.py` | **verbの単一宣言** | ✗ | ✗ |
-| `duocad/svg_import.py` | SVG → スケッチの図形（svgelements は build123d の推移依存で既に入っている） | ✗ | ✗ |
-| `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
+| `duocad/svg_import.py` | SVG → スケッチの図形（`svgelements` は本番依存） | ✗ | ✗ |
+| `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | ✗ |
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
 | `duocad/brep_{topology,geometry,checks,history,operations,planar}.py` | カーネルの共通層（位相・幾何量・形状検査・由来・ブーリアン・平面。`kernel` と `kernel_*` が使う） | **○** | ✗ |
 | `duocad/kernel_brep.py` | BRep保存・`inspect_solid`・箱/格子との共通体積 | **○** | ✗ |

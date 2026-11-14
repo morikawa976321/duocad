@@ -841,7 +841,7 @@ def model_from_design_mask(
 ) -> VoxelModel:
     """塊(設計空間)を bool マスクで、面アンカーの対象ソリッドを別に受け取って組み立てる。
 
-    `anchor_shape` は OCCT の `TopoDS_Shape` / build123d のオブジェクト / 既に作った `TriangleSoup`。**面添字は渡したものの面の並びで決まる**ので、
+    `anchor_shape` は OCCT の `TopoDS_Shape` か既に作った `TriangleSoup`。**面添字は渡したものの面の並びで決まる**ので、
     面を選ぶのに使った `TriangleSoup` があればそれを渡すこと(作り直すと面添字が食い違いうる)。
     `keep` / `obstacle` は同じ格子に載せる(形か bool マスク)。**塊からはみ出したら `OutsideDesignSpaceError`**(黙って切り詰めない)。
     """
@@ -967,11 +967,10 @@ def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, 
 
 
 def unwrap(shape: Any) -> Any:
-    """build123d のオブジェクトなら `.wrapped` を取り出す(`None` は拒む。`wrapped` が `None` なら元のオブジェクト)。"""
+    """`TopoDS_Shape` を受け取る(`None` は拒む)。"""
     if shape is None:
         raise ValueError("shape is None")
-    inner = getattr(shape, "wrapped", None)
-    return inner if inner is not None else shape
+    return shape
 
 
 def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:

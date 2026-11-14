@@ -1,24 +1,16 @@
-"""問い合わせ層 — verbがbuild123dを直接呼ばないための境界。
+"""問い合わせ層 — verbがカーネル/OCPを直接呼ばないための境界。
 
-**build123dをimportしてよいのはこのモジュールだけ**(OCPを直接叩くのは kernel.py の責務)。
+面・辺の添字と列挙は `brep_topology._face_map` / `_edge_map` に揃える(`TopExp.MapShapes_s` 相当。
+**辺の契約は indexed map の件数**(`brep_topology.edge_count` / `edge_of`)。縮退辺を含む。
+`TopExp_Explorer` だけの走査は辺を二重に数え、他の列挙は縮退辺を落とすことがある。
+次の値は OCCT 経由で `brep_geometry` / `kernel` から取る:
 
-面の列挙は build123d に任せる。build123d の `.faces()` は内部で `TopExp.MapShapes_s` を使うため**重複除去済み**で、
-kernel の `face_count` と一致する。**辺は一致しない**: `.edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、
-辺の数と添字は kernel の `edge_count` / `edge_of`(選択・フィレット・`describe_edges` が共有する添字の体系)から取る。
-一方、次の2つは**OCCTの値そのものが契約**なので kernel へ委譲する:
-
-- 体積は `BRepGProp.VolumeProperties_s`(Eps無し)で求める。build123d の `Compound.volume` は
-  ソリッドごとの合計を取る別経路なので使わない。
-- 全周円筒の判定は `BRepAdaptor_Surface` のU範囲(度)で行う(build123dの `geom_type` は
-  円筒を全周/部分に分けない)。
+- 体積は `BRepGProp.VolumeProperties_s`(Eps無し)。
+- 全周円筒の判定は `BRepAdaptor_Surface` のU範囲(度)(`classify_face`)。
 """
 from __future__ import annotations
 
 from typing import Any
-
-# `Compound.cast` は TopoDS_Shape の実型を見て正しいラッパ型へ振り分ける classmethod。
-# 基底の `Shape.cast` は抽象メソッドで None を返すため使えない。
-from build123d import CenterOf, Compound, Edge, Face
 
 from . import kernel
 
@@ -32,18 +24,20 @@ def describe_shape(shape: Any) -> dict:
     """形状の面・辺の数と種別内訳(平面/全周円筒/部分円筒/トーラス/円錐/spline)を返す。
 
     `faces_by_type` の全キーの合計は常に `face_count` と一致する。`edge_count` は縮退辺を含み、`describe_edges` の件数・
-    辺の選択で指せる添字の上限と同じ(build123d の `.edges()` の件数ではない)。
+    辺の選択で指せる添字の上限と同じ。
     """
-    wrapped = _wrap(shape)
-    faces = wrapped.faces()
+    if shape is None:
+        raise ValueError("shape is None (nothing to describe)")
+    raw = _unwrap(shape)
+    face_map = _brep_topology._face_map(raw)
 
     faces_by_type = {kind: 0 for kind in _brep_geometry.FACE_KINDS}
-    for face in faces:
-        faces_by_type[_brep_geometry.classify_face(face.wrapped)] += 1
+    for index in range(1, face_map.Extent() + 1):
+        faces_by_type[_brep_geometry.classify_face(_brep_topology._face_at(face_map, index))] += 1
 
     return {
-        "face_count": len(faces),
-        "edge_count": _brep_topology.edge_count(_unwrap(shape)),
+        "face_count": face_map.Extent(),
+        "edge_count": _brep_topology.edge_count(raw),
         "faces_by_type": faces_by_type,
     }
 
@@ -56,9 +50,7 @@ def volume(shape: Any) -> float:
 def describe_edges(shape: Any) -> list:
     """辺を1始まりの添字つきで列挙する(フィレット・面取りの辺はここから選ぶ)。
 
-    **添字と種別は `kernel` 側から取る**。build123d の `.edges()` の順序が `brep_topology._edge_map`
-    と一致する保証は無く、ずれると**選んだ辺と違う辺が丸まる**ので、build123d は長さと端点の
-    計測にだけ使う。
+    **添字と種別は `kernel` 側から取る**。`_edge_map` と一致しない列挙を使うと**選んだ辺と違う辺が丸まる**。
 
     `start` / `end` は辺の端点(閉じた辺=円などでは同じ点になる)。
     """
@@ -74,40 +66,36 @@ def describe_edge(shape: Any, edge_index: int) -> dict:
 
 
 def _describe_edge(edge: Any, index: int) -> dict:
-    wrapped = Edge(edge)
-    start = wrapped.start_point()
-    end = wrapped.end_point()
+    start, end = _brep_geometry.edge_endpoints(edge)
     return {
         "index": index,
         "kind": _brep_geometry.classify_edge(edge),
         "degenerate": _brep_geometry.edge_degenerate(edge),
         "length": _brep_geometry.edge_length(edge),
-        "start": [float(start.X), float(start.Y), float(start.Z)],
-        "end": [float(end.X), float(end.Y), float(end.Z)],
+        "start": [float(start[0]), float(start[1]), float(start[2])],
+        "end": [float(end[0]), float(end[1]), float(end[2])],
     }
 
 
 def face_centroid(shape: Any, face_index: int) -> list:
-    """面1枚の**面積重心**(`CenterOf.MASS`)をワールド座標[mm]で返す。
+    """面1枚の**面積重心**をワールド座標[mm]で返す。
 
-    **`face_fingerprint` の `center` とは別物。** あちらは `Face.center()` の既定
-    (`CenterOf.GEOMETRY`)で、曲面では面パッチの上にすら乗らない —— hanger の荷重面
-    (トーラス、面積 2783mm^2)で GEOMETRY は `[0, -212.862, 60]`、MASS は `[0, -200, 60]` と
-    12.9mm 離れる。面の上に material が乗る場所を知りたい側はこちら
-    (`optimize_run._check_anchor_centroids`)。平面では一致する。
+    **`face_fingerprint` の `center` とは別物。** あちらは平面なら面積重心と一致するが、曲面では UV 範囲の
+    中点(面パッチの上にすら乗らないことがある) —— hanger の荷重面(トーラス、面積 2783mm^2)で
+    代表点は `[0, -212.862, 60]`、面積重心は `[0, -200, 60]` と 12.9mm 離れる。
+    面の上に material が乗る場所を知りたい側はこちら(`optimize_run._check_anchor_centroids`)。
 
     添字は1始まり。範囲外は ValueError(`brep_topology.face_of` が投げる)。
     """
     index = int(face_index)
-    point = Face(_brep_topology.face_of(_unwrap(shape), index)).center(CenterOf.MASS)
-    return [float(point.X), float(point.Y), float(point.Z)]
+    _, centre = _brep_geometry._face_props(_brep_topology.face_of(_unwrap(shape), index))
+    return [float(centre[0]), float(centre[1]), float(centre[2])]
 
 
 def face_fingerprint(shape: Any, face_index: int) -> dict:
     """面1枚の**指紋** `{"index", "area", "normal", "center"}` を返す。
 
-    **曲面の `center` は面積重心ではない**(`Face.center()` の既定 = `CenterOf.GEOMETRY` は、build123d 0.11.1
-    では平面なら面積重心、曲面なら UV 範囲の中点を返す)。
+    **曲面の `center` は面積重心ではない**(平面なら面積重心、曲面なら UV 範囲の中点)。
     照合に使うのは面積と法線だけ(`optimize.fingerprint_mismatch`)。「面の上のどこか」には
     使えない(曲面では面パッチから離れる)ので、その用途は `face_centroid`。
 
@@ -118,14 +106,15 @@ def face_fingerprint(shape: Any, face_index: int) -> dict:
     `_face_map` の全走査が2回になる)。
     """
     index = int(face_index)
-    wrapped = Face(_brep_topology.face_of(_unwrap(shape), index))
-    normal = wrapped.normal_at()
-    center = wrapped.center()
+    face = _brep_topology.face_of(_unwrap(shape), index)
+    normal = _brep_geometry.face_normal_at(face)
+    center = _brep_geometry.face_query_center(face)
+    area, _ = _brep_geometry._face_props(face)
     return {
         "index": index,
-        "area": float(wrapped.area),
-        "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
-        "center": [float(center.X), float(center.Y), float(center.Z)],
+        "area": float(area),
+        "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
+        "center": [float(center[0]), float(center[1]), float(center[2])],
     }
 
 
@@ -133,9 +122,9 @@ def describe_faces(shape: Any) -> list:
     """面を1始まりの添字つきで列挙する。
 
     1. **添字は `kernel` の数え方に揃える**。ずれると選んだ面と違う面が押される。
-    2. **法線は外向き**で、`kernel.tessellate` の `faces[].normal` と同じ約束。向きは
-       build123d の `Face.normal_at()` に任せる —— `BRepPrimAPI_MakeBox` は底面を
-       `TopAbs_REVERSED` で持つが `normal_at()` は外向きを返すので、**自分で反転すると二重になる**。
+    2. **法線は外向き**で、`kernel.tessellate` の `faces[].normal` と同じ約束 ——
+       `BRepPrimAPI_MakeBox` は底面を `TopAbs_REVERSED` で持つが `BRepGProp_Face` は外向きを返すので、
+       **自分で反転すると二重になる**。
 
     曲面の `normal` / `center` は面の中央(UV範囲の中点)での値でしかない。
     """
@@ -151,15 +140,15 @@ def describe_face(shape: Any, face_index: int) -> dict:
 
 
 def _describe_face(face: Any, index: int) -> dict:
-    wrapped = Face(face)
-    normal = wrapped.normal_at()
-    center = wrapped.center()
+    normal = _brep_geometry.face_normal_at(face)
+    center = _brep_geometry.face_query_center(face)
+    area, _ = _brep_geometry._face_props(face)
     return {
         "index": index,
         "kind": _brep_geometry.classify_face(face),
-        "area": float(wrapped.area),
-        "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
-        "center": [float(center.X), float(center.Y), float(center.Z)],
+        "area": float(area),
+        "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
+        "center": [float(center[0]), float(center[1]), float(center[2])],
     }
 
 
@@ -167,8 +156,7 @@ def describe_vertices(shape: Any) -> list:
     """頂点を1始まりの添字つきで列挙する(`[{"index": int, "point": [x,y,z]}, ...]`)。
 
     **添字は `brep_topology.count_subshapes(shape, "vertex")` の体系**(`selection._select_shape`
-    と同じ)。build123d の `.vertices()` の順序とは一致する保証が無いので、座標も順序も
-    `kernel.vertex_positions` から取る。
+    と同じ)。`kernel.vertex_positions` から取る。
     """
     return kernel.vertex_positions(_unwrap(shape))
 
@@ -181,19 +169,11 @@ def edges_of_face(shape: Any, face_index: int) -> list:
     `fillet(edges=[...])` の添字と一致する。
     """
     raw = _unwrap(shape)
-    face = Face(_brep_topology.face_of(raw, face_index))
+    face = _brep_topology.face_of(raw, face_index)
     indexes = {
-        kernel.edge_index_of(raw, edge.wrapped) for edge in face.outer_wire().edges()
+        kernel.edge_index_of(raw, edge) for edge in _brep_geometry.outer_wire_edge_shapes(face)
     }
     return sorted(indexes)
-
-
-def _wrap(shape: Any):
-    if shape is None:
-        raise ValueError("shape is None (nothing to describe)")
-    if hasattr(shape, "wrapped"):
-        return shape
-    return Compound.cast(shape)
 
 
 def _unwrap(shape: Any):

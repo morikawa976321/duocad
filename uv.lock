@@ -225,7 +225,6 @@ name = "duocad"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
-    { name = "build123d" },
     { name = "cadquery-ocp-novtk" },
     { name = "gudhi" },
     { name = "manifold3d" },
@@ -233,17 +232,21 @@ dependencies = [
     { name = "pytest" },
     { name = "pytest-xdist" },
     { name = "scikit-image" },
+    { name = "svgelements" },
     { name = "websockets" },
 ]
 
 [package.optional-dependencies]
+fixtures = [
+    { name = "build123d" },
+]
 gpu = [
     { name = "cupy-cuda13x", extra = ["ctk"], marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "build123d", specifier = "==0.11.1" },
+    { name = "build123d", marker = "extra == 'fixtures'", specifier = "==0.11.1" },
     { name = "cadquery-ocp-novtk", specifier = "==7.9.3.1.1" },
     { name = "cupy-cuda13x", extras = ["ctk"], marker = "(sys_platform == 'linux' and extra == 'gpu') or (sys_platform == 'win32' and extra == 'gpu')", specifier = "==14.2.0" },
     { name = "gudhi", specifier = "==3.13.0" },
@@ -252,9 +255,10 @@ requires-dist = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "scikit-image", specifier = "==0.26.0" },
+    { name = "svgelements", specifier = "==1.9.6" },
     { name = "websockets", specifier = "==17.0.1" },
 ]
-provides-extras = ["gpu"]
+provides-extras = ["fixtures", "gpu"]
 
 [[package]]
 name = "execnet"

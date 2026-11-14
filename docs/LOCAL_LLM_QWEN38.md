@@ -67,7 +67,8 @@ llama-server -m Qwen3.8-27B-Q4_K_M.gguf -ngl 99 -c 65536 -ctk q8_0 -ctv q8_0 -fa
 - 思考の本文はストリーミングの断片（`delta.reasoning_content`）から拾って記録する（`_assemble` は捨てる）
 
 **採点は文書の状態だけで行う**（AI の報告は見ない）。ボディ数、体積（題材A〜Cは ±0.1%、D は ±1 mm³）、境界箱（±0.05 mm）、
-**点の内外**（`export_step` した STEP を build123d で読み、`Solid.is_inside` で「ここは穴」「ここは実体」を数点確かめる。六角形の
+**点の内外**（`export_step` した STEP を `kernel.read_step` で読み、`BRepClass3d_SolidClassifier(solid, gp_Pnt(x,y,z), tol).State()` で
+「ここは穴」「ここは実体」を数点確かめる。`duocad/mesh_geometry.py` と同型。六角形の
 向き・穴の位置・重心の取り違えを体積だけでは見分けられないため）。面数は D（フィレットのかけ漏れ）だけで見る —— A〜C で
 面数まで見ると、同じ形を別の手順で作って底面が2枚に分かれただけの回を落とした。採点が正解を通し、典型的な誤り（外接円半径の
 取り違え・向きの30°ずれ・重心を高さの中点にする・フィレットのかけ漏れ）を落とすことを、測定の前に毎回確かめた。

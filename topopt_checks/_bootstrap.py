@@ -6,8 +6,8 @@
 そのときリポジトリ直下は sys.path に入っていない(入るのはこのスクリプトの置き場だけ)。
 
 **`duocad/` の外に置いてある**のは `tests/` と同じ理由で、`tests/test_boundaries.py` が
-`duocad/` 配下を再帰的に走査して「OCP/build123d を直接 import してよいのは kernel.py /
-query.py だけ」を強制するからである。検査は合成ソリッドを build123d で組むので、
+`duocad/` 配下を再帰的に走査して「build123d は import しない・OCP を import してよいのは
+`OCP_ALLOWED` に名指しした層だけ」を強制するからである。検査は合成ソリッドを build123d で組むので、
 `duocad/` の中に置くとその境界を名指しで免除させることになる(境界の設計意図は
 「サブパッケージを作って逃げられない」ことなので、逃げ道を作らない)。
 

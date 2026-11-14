@@ -71,11 +71,12 @@ import numpy as np
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
 from _documents import open_session
 from _harness import Checker, expect_raises, run
+from duocad import kernel
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
-from _fixtures import demo_bracket, demo_conditions, severed_conditions, voxel_model
+from _fixtures import demo_bracket, demo_conditions, raw, severed_conditions, voxel_model
 
 CHECK = Checker()
 check = CHECK.check
@@ -232,7 +233,7 @@ def check_outside_raises() -> None:
     # (a) model_from_design_mask —— 例外。メッセージにはみ出し要素数が入る。
     raised = None
     try:
-        vx.model_from_design_mask(grid, occupied, anchor_shape=soup, keep=keep)
+        vx.model_from_design_mask(grid, occupied, anchor_shape=soup, keep=raw(keep))
     except vx.OutsideDesignSpaceError as e:
         raised = e
     check(
@@ -264,7 +265,7 @@ def check_outside_raises() -> None:
     both = None
     try:
         vx.model_from_design_mask(
-            grid, occupied, anchor_shape=soup, keep=keep, obstacle=obstacle
+            grid, occupied, anchor_shape=soup, keep=raw(keep), obstacle=raw(obstacle)
         )
     except vx.OutsideDesignSpaceError as e:
         both = e
@@ -345,7 +346,7 @@ def check_case1_end_to_end() -> None:
         fixed_faces=search_space.fixed_faces,
         load_faces=search_space.load_faces,
         forces=[(0.0, 0.0, -1.0)] * len(search_space.load_faces),
-        preserves=[("keep", vx.unwrap(cond.keep))],
+        preserves=[("keep", raw(cond.keep))],
         excludes=[],
         # 収束や安全率の質は見ない(check_optimize_wiring.py / check_stress.py の役目)ので、
         # 初期合格が速く見つかるよう目標安全率は緩く取る。
@@ -377,7 +378,7 @@ def check_case1_end_to_end() -> None:
     # **本丸**: 条件のどのソリッドにも入っていない空間に材料が置かれた = 塊が条件から作られ、
     # 探索の初期合格モデルがその中で自由に形を持てる。0だと「保持ソリッドを塗っただけ」。
     keep_occ, _ = vx.occupancy(
-        vx.triangles_from_shape(vx.unwrap(cond.keep), deviation=search_space.stats["deviation"]),
+        vx.triangles_from_shape(raw(cond.keep), deviation=search_space.stats["deviation"]),
         search_space.grid,
     )
     grown = search.best_feasible.mask & ~keep_occ
@@ -425,7 +426,7 @@ def check_case1_keep_inside() -> None:
         f"{ {k: v['keep_elements'] for k, v in bodies.items()} }",
     )
     g_lo, g_hi = space.grid.world_box()
-    k_lo, k_hi = vx._shape_bbox(vx.unwrap(_cond.keep))
+    k_lo, k_hi = vx._shape_bbox(raw(_cond.keep))
     check(
         "保持ソリッドが格子そのものの内側にある(格子の外は誰も数えていない)",
         bool(np.all(k_lo >= g_lo - 1e-9) and np.all(k_hi <= g_hi + 1e-9)),
@@ -443,7 +444,7 @@ def check_case1_keep_inside() -> None:
         keep=_cond.keep,
         fixed_faces=_cond.fixed_faces,
         load_faces=_cond.load_faces,
-        obstacle=eater,
+        obstacle=raw(eater),
         bodies=_cond.bodies,
     )
     raised = None
@@ -498,8 +499,8 @@ def check_case1_anchors_not_empty() -> None:
     from build123d import Box, Pos
 
     remote = Pos(70, 0, 0) * Box(6, 20, 20)  # 保持ではない、拘束面だけを提供する板
-    anchor_shape = _cond.keep + remote
-    a_soup = vx.triangles_from_shape(vx.unwrap(anchor_shape), deviation=0.2)
+    anchor_shape = kernel.make_compound([_cond.keep, raw(remote)])
+    a_soup = vx.triangles_from_shape(raw(anchor_shape), deviation=0.2)
     far_fixed = an.faces_matching(
         a_soup, kind="plane", normal=(1, 0, 0), near_point=(73, 0, 0), near_tol=1e-4
     )
@@ -519,7 +520,7 @@ def check_case1_anchors_not_empty() -> None:
                 load_faces=far_load[0],
                 obstacle=_cond.obstacle,
                 anchor_shape=anchor_shape,
-                bodies=_cond.bodies + (ds.condition_body("remote", remote, roles=("fixed",)),),
+                bodies=_cond.bodies + (ds.condition_body("remote", raw(remote), roles=("fixed",)),),
             ),
             elements_long_axis=CASE1_LONG_AXIS,
         )
@@ -550,7 +551,7 @@ def check_case1_obstacle() -> None:
     cond, space = case1_space()
     # 塊の中の除外領域を**独立に**計算し直す(design_space.py が引いた結果を再利用しない)。
     obs_soup = vx.triangles_from_shape(
-        vx.unwrap(cond.obstacle), deviation=space.stats["deviation"]
+        raw(cond.obstacle), deviation=space.stats["deviation"]
     )
     obs, _ = vx.occupancy(obs_soup, space.grid)
     overlap = int(np.count_nonzero(space.mask & obs))
@@ -572,7 +573,7 @@ def check_case1_obstacle() -> None:
         keep=cond.keep,
         fixed_faces=cond.fixed_faces,
         load_faces=cond.load_faces,
-        obstacle=cond.obstacle + far,
+        obstacle=kernel.make_compound([cond.obstacle, raw(far)]),
         bodies=cond.bodies,
     )
     space_far = ds.derive(cond_far, elements_long_axis=CASE1_LONG_AXIS)
@@ -595,7 +596,7 @@ def check_case1_obstacle() -> None:
             keep=cond.keep,
             fixed_faces=cond.fixed_faces,
             load_faces=cond.load_faces,
-            obstacle=far,
+            obstacle=raw(far),
             bodies=cond.bodies,
         ),
         elements_long_axis=CASE1_LONG_AXIS,
@@ -1072,11 +1073,11 @@ def check_empty_condition_face_warning() -> None:
     # --- 14-3: 製品経路(optimize_run._empty_condition_faces)も derive() の
     # DesignSpace.table から同じ診断を作る ---
     cond = ds.Conditions(
-        keep=tiny,
+        keep=raw(tiny),
         fixed_faces=big_face,
         load_faces=empty_face,
         obstacle=None,
-        bodies=(ds.condition_body("tiny", tiny, roles=("keep", "fixed", "load")),),
+        bodies=(ds.condition_body("tiny", raw(tiny), roles=("keep", "fixed", "load")),),
     )
     space = ds.derive(cond, elements_long_axis=8, margin_ratio=0.1)
     check(
