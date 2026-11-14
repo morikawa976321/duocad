@@ -323,7 +323,8 @@ class DocumentStore:
             data = captured.pack(file_sha256 or document_snapshot.file_digest(document.read_bytes()))
             target = self._snapshot_path(document)
             target.parent.mkdir(exist_ok=True)
-            staging = target.with_name(target.name + ".writing")
+            # 先読みの子とサーバが同じ文書を同時に書いても、一時ファイルが重ならない。
+            staging = target.with_name(f"{target.name}.{os.getpid()}.writing")
             staging.write_bytes(data)
             os.replace(staging, target)
             return True
@@ -340,9 +341,19 @@ class DocumentStore:
             return None
         try:
             return document_snapshot.restore(data, file_sha256=file_sha256, operation_count=operation_count)
+        except document_snapshot.SnapshotLight:
+            return None  # 再生が速い文書の印。再生で開くのが正しいので残す
         except document_snapshot.SnapshotError:
             self.drop_snapshot(document)
             return None
+
+    def snapshot_status(self, document: Path, file_sha256: str) -> str:
+        """鍵の合うスナップショットがあるか。"ready" / "light"(再生が速い印) / "missing"(`document_snapshot.header_status`)。"""
+        try:
+            data = self._snapshot_path(document).read_bytes()
+        except OSError:
+            return "missing"
+        return document_snapshot.header_status(data, file_sha256)
 
     def drop_snapshot(self, document: Path) -> None:
         try:

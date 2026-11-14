@@ -17,6 +17,7 @@ import functools
 import hashlib
 import io
 import json
+import os
 import pickle
 import struct
 import sys
@@ -33,7 +34,8 @@ _MAGIC = b"DUOCADSNAP\n"
 
 #: 再生にこれ以上かかる文書にだけスナップショットを作る(小さな文書は再生が速く、毎回の書き出しが無駄になる)。[秒]
 #: 実測の目安: 押し出し2回の文書で約2秒、押し出し4・フィレット4・面取り1の文書で約10秒、数十 ms の文書は不要。
-MIN_BUILD_SECONDS = 0.5
+#: 環境変数 `DUOCAD_SNAPSHOT_MIN_BUILD_SECONDS` で変えられる(先読みの子プロセスにも継がれる。テストが 0 にする)。
+MIN_BUILD_SECONDS = float(os.environ.get("DUOCAD_SNAPSHOT_MIN_BUILD_SECONDS", "0.5"))
 
 _SHAPE = "s"
 _MESH = "m"
@@ -41,6 +43,10 @@ _MESH = "m"
 
 class SnapshotError(Exception):
     """スナップショットを使えない(壊れている・鍵が合わない・版が違う)。呼び手は通常の再生へ落とす。"""
+
+
+class SnapshotLight(SnapshotError):
+    """鍵は合うが、中身の無い「再生が速い」の印(`light_marker`)。再生で開くのが正しく、捨てない。"""
 
 
 @functools.lru_cache(maxsize=1)
@@ -161,6 +167,26 @@ class Restored:
     operation_count: int
 
 
+def light_marker() -> Captured:
+    """「この鍵の文書は再生が速く、スナップショットは要らない」の印(先読みが毎回調べ直さないため。`snapshot_prebuild`)。"""
+    return Captured(header={"format": FORMAT_VERSION, "code": code_fingerprint(), "light": True}, state=b"", blobs=[])
+
+
+def header_status(data: bytes, file_sha256: str) -> str:
+    """鍵の合うスナップショットか(読み込まずに先頭だけ見る)。"ready"(使える)・"light"(速いの印)・"missing"(無い・合わない・壊れている)。"""
+    try:
+        if not data.startswith(_MAGIC):
+            return "missing"
+        offset = len(_MAGIC)
+        (head_length,) = struct.unpack_from("<I", data, offset)
+        header = json.loads(data[offset + 4 : offset + 4 + head_length].decode("utf-8"))
+        if header.get("format") != FORMAT_VERSION or header.get("code") != code_fingerprint() or header.get("file_sha256") != file_sha256:
+            return "missing"
+        return "light" if header.get("light") else "ready"
+    except Exception:  # noqa: BLE001 - 壊れたものは無いのと同じ
+        return "missing"
+
+
 def capture(document: Any, *, memo: Memo, build_seconds: float) -> Captured:
     """今の文書の状態を写す(主スレッドで呼ぶ。書き換えと競合しないよう、読むだけで速く済む形にしてある)。
 
@@ -212,6 +238,8 @@ def _restore(data: bytes, *, file_sha256: str, operation_count: int) -> Restored
         raise SnapshotError("スナップショットを作ったコード・OCP の版が今と違う")
     if header.get("file_sha256") != file_sha256:
         raise SnapshotError("スナップショットを作った後に文書のファイルが変わった")
+    if header.get("light"):
+        raise SnapshotLight("再生が速い文書の印")
     if header.get("operations") != operation_count:
         raise SnapshotError("スナップショットの操作数が文書と合わない")
     state_end = offset + int(header["state"])

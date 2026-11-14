@@ -181,6 +181,9 @@ class Session:
         #: `document_snapshot.MIN_BUILD_SECONDS` 以上なら、自動保存のたびに再生結果も預ける(小さな文書には作らない)。
         self._build_seconds = 0.0
         self._snapshot_memo = document_snapshot.Memo()
+        #: 起動後に最近の文書のスナップショットを先に作る係(`snapshot_prebuild.Prebuilder`。サーバ(`mcp_server.main`)だけが付ける)。
+        #: 開こうとした文書をその係が再生している最中なら、終わるのを待つ。
+        self.prebuilder: Any = None
         #: 配りもの。文書を差し替えたら `view.reset()` を呼ぶ(`_replace_document`)。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
@@ -1346,6 +1349,8 @@ class Session:
         kept = self.optimization_results.take_document(source.name)
         if kept is not None:
             return self._open_undelivered(source.name, kept)
+        if self.prebuilder is not None:
+            self.prebuilder.wait_for(source.name)
         payload, digest = self.store.read_document_file_with_digest(source)
         log = OpLog.from_payload(payload)
         restored = self.store.read_snapshot(source, digest, len(log.entries))
