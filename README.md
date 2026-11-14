@@ -43,7 +43,7 @@ uv run python -m duocad.mcp_server --open
 
 | 層 | 使っているもの |
 |---|---|
-| 形状カーネル | OCCT（[build123d](https://github.com/gumyr/build123d) / OCP 経由）、manifold3d |
+| 形状カーネル | OCCT（OCP 経由）、manifold3d |
 | サーバー | Python、WebSocket、MCP |
 | 画面 | Svelte、three.js、Vite |
 | テスト | pytest、実ブラウザでの操作テスト |

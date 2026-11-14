@@ -14,6 +14,14 @@ from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
 
 
+def raw(shape: Any) -> Any:
+    """build123d のオブジェクトなら `TopoDS_Shape` を取り出す(`None` はそのまま)。
+
+    `duocad/topopt` は `TopoDS_Shape` しか受けないので、build123d で組んだ合成題材はここを通してから渡す。
+    """
+    return getattr(shape, "wrapped", shape)
+
+
 def voxel_model(
     shape: Any,
     elements_long_axis: int = 40,
@@ -25,8 +33,10 @@ def voxel_model(
     """1つのソリッドを「削る前の塊」兼「面アンカーの対象」として格子に載せる。占有は `stats["occupancy"]` に入る。
 
     格子は B-rep の bbox から起こす。三角形分割の bbox だと弦が真の面より内側に来て、「B-repの周囲に1要素分の余白」を満たせない。
+    `shape` / `keep` / `obstacle` は build123d のオブジェクトでも `TopoDS_Shape` でもよい。
     """
-    solid = vx.unwrap(shape)
+    solid = vx.unwrap(raw(shape))
+    keep, obstacle = raw(keep), raw(obstacle)
     if grid is None:
         lo, hi = vx._shape_bbox(solid)
         grid = vx.grid_for_bbox(lo, hi, elements_long_axis)
@@ -82,12 +92,13 @@ def demo_conditions(angle_deg: float = 0.0) -> ds.Conditions:
     keep = rot * ((Pos(-30, 0, 0) * Box(6, 24, 24)) + (Pos(26, 0, 15) * Box(8, 8, 6)))
     obstacle = rot * (Pos(0, 0, 0) * Rot(90, 0, 0) * Cylinder(radius=5, height=40))
 
-    soup = vx.triangles_from_shape(vx.unwrap(keep), deviation=0.2)
+    keep, obstacle = raw(keep), raw(obstacle)
+    soup = vx.triangles_from_shape(keep, deviation=0.2)
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-33, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(26, 0, 18))
     bodies = (
-        ds.condition_body("fixed_pad", fixed_pad, roles=("keep", "fixed")),
-        ds.condition_body("load_pad", load_pad, roles=("keep", "load")),
+        ds.condition_body("fixed_pad", raw(fixed_pad), roles=("keep", "fixed")),
+        ds.condition_body("load_pad", raw(load_pad), roles=("keep", "load")),
     )
     return ds.Conditions(
         keep=keep, fixed_faces=fixed, load_faces=load, obstacle=obstacle, bodies=bodies
@@ -109,7 +120,7 @@ def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> ds
         keep=base.keep,
         fixed_faces=base.fixed_faces,
         load_faces=base.load_faces,
-        obstacle=wall,
+        obstacle=raw(wall),
         anchor_shape=base.anchor_shape,
         bodies=base.bodies,
     )

@@ -1,6 +1,6 @@
 """辺・面の一覧(`query.describe_edges` / `describe_faces`)が、本数に比例した時間で済むことの回帰テスト。"""
 
-from build123d import Box
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import brep_topology, query
 
@@ -14,7 +14,7 @@ def _count_map_builds(monkeypatch, call):
         return original(shape, kind)
 
     monkeypatch.setattr(brep_topology, "_subshape_map", counting)
-    call(Box(10, 10, 10).wrapped)
+    call(BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape())
     return built
 
 

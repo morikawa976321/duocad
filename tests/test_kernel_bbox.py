@@ -7,8 +7,12 @@ import math
 import pathlib
 
 import pytest
-from build123d import Box, Cone, Cylinder
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus
+from OCP.BRepPrimAPI import (
+    BRepPrimAPI_MakeBox,
+    BRepPrimAPI_MakeCone,
+    BRepPrimAPI_MakeCylinder,
+    BRepPrimAPI_MakeTorus,
+)
 
 from duocad import kernel
 
@@ -24,9 +28,9 @@ def _torus_segment():
 
 
 SHAPES = {
-    "box": lambda: Box(40, 20, 10).wrapped,
-    "cylinder": lambda: Cylinder(10, 30).wrapped,
-    "cone": lambda: Cone(10, 0, 20).wrapped,
+    "box": lambda: BRepPrimAPI_MakeBox(40.0, 20.0, 10.0).Shape(),
+    "cylinder": lambda: BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape(),
+    "cone": lambda: BRepPrimAPI_MakeCone(10.0, 0.0, 20.0).Shape(),
     "torus_segment": _torus_segment,
 }
 

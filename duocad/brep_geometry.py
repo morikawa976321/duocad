@@ -11,13 +11,15 @@ from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepGProp import BRepGProp, BRepGProp_Domain, BRepGProp_Face, BRepGProp_Vinert
 from OCP.BRepLProp import BRepLProp_SLProps
+from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box, Bnd_OBB
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
+from OCP.GeomLib import GeomLib_IsPlanarSurface
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_REVERSED
-from OCP.TopExp import TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.gp import gp_Pnt, gp_Vec
 
@@ -369,6 +371,11 @@ def classify_edge(edge: Any) -> str:
     return "other"
 
 
+def face_normal_at(face: Any) -> tuple[float, float, float]:
+    """面の UV 範囲の中点での**外向き**単位法線(`kernel.tessellate` の `faces[].normal` と同じ約束)。"""
+    return _face_normal(face)
+
+
 def _face_normal(face: Any) -> tuple:
     """面の中央での**外向き**単位法線。`BRepGProp_Face` は面の向きを見るので反転面でも外を向く(20mm立方体の6面で実測)。"""
     gface = BRepGProp_Face(TopoDS.Face_s(face))
@@ -380,6 +387,40 @@ def _face_normal(face: Any) -> tuple:
         raise ValueError("face normal is degenerate (magnitude 0)")
     normal.Normalize()
     return (normal.X(), normal.Y(), normal.Z())
+
+
+def face_query_center(face: Any) -> tuple[float, float, float]:
+    """指紋照合用の面上の代表点。平面(厳密平面扱い)なら面積重心、曲面なら UV 範囲の中点(`BRepGProp_Face.Normal` の点)。"""
+    topo_face = TopoDS.Face_s(face)
+    if GeomLib_IsPlanarSurface(BRep_Tool.Surface_s(topo_face), 1.0e-6).IsPlanar():
+        _, centre = _face_props(topo_face)
+        return centre
+    u0, u1, v0, v1 = BRepTools.UVBounds_s(topo_face)
+    point = gp_Pnt()
+    normal = gp_Vec()
+    BRepGProp_Face(topo_face).Normal(0.5 * (u0 + u1), 0.5 * (v0 + v1), point, normal)
+    return (point.X(), point.Y(), point.Z())
+
+
+def edge_endpoints(edge: Any) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """辺の始点・終点[mm](閉じた辺は同一点)。辺の向きを込みで返す(`TopAbs_REVERSED` の辺は始点と終点が入れ替わる)。"""
+    topo_edge = TopoDS.Edge_s(edge)
+    # 外部の罠: `FirstVertex_s` / `LastVertex_s` の既定(CumOri=False)は辺の向きを見ず、REVERSED の辺で始点と終点が逆になる
+    # (箱の12辺中6本、フィレット立方体の56辺中26本)。`describe_edges` の `start` / `end` は向き込みの値で出してきた。
+    start = BRep_Tool.Pnt_s(TopExp.FirstVertex_s(topo_edge, True))
+    end = BRep_Tool.Pnt_s(TopExp.LastVertex_s(topo_edge, True))
+    return (start.X(), start.Y(), start.Z()), (end.X(), end.Y(), end.Z())
+
+
+def outer_wire_edge_shapes(face: Any) -> list:
+    """面の外周ワイヤを成す辺(穴の縁は含めない)。"""
+    outer = BRepTools.OuterWire_s(TopoDS.Face_s(face))
+    edges = []
+    explorer = TopExp_Explorer(outer, TopAbs_ShapeEnum.TopAbs_EDGE)
+    while explorer.More():
+        edges.append(TopoDS.Edge_s(explorer.Current()))
+        explorer.Next()
+    return edges
 
 
 def _face_props(face: Any) -> tuple:

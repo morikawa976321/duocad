@@ -815,7 +815,7 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
 def edge_index_of(shape: "TopoDS_Shape", edge: Any) -> int:
     """辺が形状の何番目か(1始まり)を `IsSame` で返す。無ければ ValueError。
 
-    build123d の列挙順が `_edge_map` と一致する保証は無いので、`query.edges_of_face` は形状の同一性で引き当てる。
+    `query.edges_of_face` は辺の添字を、列挙順ではなく形状の同一性で引き当てる。
     """
     shape_map = _brep_topology._edge_map(shape)
     for index in range(1, shape_map.Extent() + 1):

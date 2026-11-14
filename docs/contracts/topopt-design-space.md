@@ -7,7 +7,7 @@
 ## 塊をマスクで受ける入口(voxelize.model_from_design_mask)
 
 - 入口は `voxelize.model_from_design_mask(grid, design, *, anchor_shape, keep=None, obstacle=None, ...)`。`design` は `grid.shape` と同じかたちの bool マスクで**複製して持つ**。かたち違い・全 False は `ValueError`。
-- `anchor_shape` は `TopoDS_Shape` / build123d オブジェクト / 既に作った `TriangleSoup` のいずれか。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに使った `TriangleSoup` をそのまま渡す(作り直すと面添字が食い違いうる)。
+- `anchor_shape` は `TopoDS_Shape` か既に作った `TriangleSoup`。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに使った `TriangleSoup` をそのまま渡す(作り直すと面添字が食い違いうる)。
 - `VoxelModel` の形は `grid` / `design` / `keep` / `obstacle` / `soup` / `stats`。`keep` / `obstacle` は `design` の内側に収まる。マスク経路の `stats` は `design_source="mask"` が付き、**`occupancy` キーは無い**。ここに依存しない。
 - 保持・除外が塊からはみ出したときは **`voxelize.OutsideDesignSpaceError`**(`ValueError` の派生)。要素数は `e.outside`(`{"keep": n, "obstacle": n}`)で引け、両方はみ出したら**両方を1つの文面に**出す。
 

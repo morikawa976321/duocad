@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import pytest
-from build123d import Box
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel
 
@@ -14,9 +14,13 @@ from duocad import (
 )
 
 
+def _box() -> object:
+    return BRepPrimAPI_MakeBox(40.0, 20.0, 10.0).Shape()
+
+
 def test_a_face_taken_twice_hits_the_same_entry() -> None:
     """`TopoDS_Shape` は hash が一致しても `__eq__` が False なので、素の dict だと当たらない。"""
-    shape = Box(40, 20, 10).wrapped
+    shape = _box()
     cache = kernel.BoundingBoxCache()
     first = kernel.bounding_box(_brep_topology.face_of(shape, 1), cache=cache)
     second = kernel.bounding_box(_brep_topology.face_of(shape, 1), cache=cache)
@@ -26,7 +30,7 @@ def test_a_face_taken_twice_hits_the_same_entry() -> None:
 
 def test_a_moved_shape_does_not_reuse_the_box_of_its_old_position() -> None:
     """落ちたら: 古い位置の箱を返している(寸法が黙って嘘になる)。"""
-    shape = Box(40, 20, 10).wrapped
+    shape = _box()
     cache = kernel.BoundingBoxCache()
     before = kernel.bounding_box(shape, cache=cache)
     moved = kernel.translate_shape(shape, 1000.0, 0.0, 0.0)
@@ -37,7 +41,7 @@ def test_a_moved_shape_does_not_reuse_the_box_of_its_old_position() -> None:
 
 def test_the_returned_box_is_not_shared_between_calls() -> None:
     """落ちたら: 呼び出し側が返り値を書き換えるとキャッシュが汚れる。"""
-    shape = Box(40, 20, 10).wrapped
+    shape = _box()
     cache = kernel.BoundingBoxCache()
     first = kernel.bounding_box(shape, cache=cache)
     first["min"][0] = 12345.0

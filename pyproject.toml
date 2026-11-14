@@ -4,8 +4,8 @@ version = "0.0.1"
 description = "自作3DCAD duocad — M0: コアの骨格（文書・操作ログ・STEP入出力）"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "build123d==0.11.1",
     "cadquery-ocp-novtk==7.9.3.1.1",
+    "svgelements==1.9.6",
     # duocad/topopt/neck_persistence.py の完成形のくびれ検査(立方複体の持続ホモロジー)
     "gudhi==3.13.0",
     # duocad/topopt/finalize.py のメッシュ集合演算(保持を足し除外を引く)。Windows 用 wheel がある版
@@ -22,6 +22,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# topopt のテスト・`topopt_checks/` の合成ソリッド(build123d)。本番の `duocad/` には入れない。
+fixtures = ["build123d==0.11.1"]
 # duocad/topopt/gpu_cg.py(形状最適化の CG を GPU で解く経路)。使う機械だけ `uv sync --extra gpu` で入れ、
 # 画面の「設定」の「GPU で計算する」で有効にする(docs/TOPOPT_GPU.md)。[ctk] で CUDA ランタイムも wheel で入り、
 # システムへの CUDA Toolkit は要らない。NVIDIA の GPU が無い機械では入れない。

@@ -36,8 +36,8 @@
 | 円柱・トーラスで済む立体を B スプラインの管で作ると、ブーリアンが桁で遅い(角から引くのが 5.5 秒 → 0.07 秒) | `duocad/kernel_overflow.py` `_exact_tube` |
 | 円錐面の延長を頂点の手前で止めると先に穴が残り、箱を内と外に割り切れない(頂点ちょうどまで延ばす) | `duocad/kernel_overflow.py` `_extended_face` |
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/brep_history.py` `maker_successors` |
-| `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
-| 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み。ただし `edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、辺の数は `brep_topology.edge_count` から取る(球で 1 と 3、全辺 R3 のフィレット立方体で 48 と 56) | `duocad/query.py` 冒頭・`describe_shape` |
+| 指紋用の `center` は面積重心ではない(平面なら面積重心、曲面なら UV 中点で面パッチから離れうる)。面積重心は `BRepGProp_Face` | `duocad/brep_geometry.py` `face_query_center` / `query.py` `face_centroid` / `face_fingerprint` |
+| 面・辺の添字は `TopExp.MapShapes_s` 相当の indexed map(`brep_topology._face_map` / `_edge_map`)。`TopExp_Explorer` の素朴な列挙は辺を二重に数える。縮退辺(球の極・円錐の頂点・フィレットの角)も map に載る — build123d の `edges()` は縮退を除くので件数がずれる(球で 1 と 3、全辺 R3 のフィレット立方体で 48 と 56) | `duocad/brep_topology.py` `count_subshapes` / `query.py` 冒頭・`describe_shape` |
 | 左手系のスケッチ枠で `gp_Ax2(中心, ax3.Direction(), X)` を作ると Y が逆になり、円弧は時計回り・楕円は角度が逆に出る(立方体6面のうち5面) | `duocad/kernel_sketch.py` `_curve_axis` |
 | `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError`(縦長の楕円は軸を 90° 回して入れ替える) | `duocad/kernel_sketch.py` `_ellipse_gp` |
 | 離心率0の `gp_Elips`(長半径と短半径の差 5e-8 以下)の辺を `BRepOffsetAPI_MakeOffset` に渡すと access violation でプロセスごと落ちる(縦横が等しい楕円は辺を `gp_Circ` にする) | `duocad/kernel_sketch.py` `_ellipse_gp` |
@@ -49,7 +49,7 @@
 | 円・直線を B-スプラインに直した辺(ブーリアン・オフセットの途中で出る)をさらにオフセットすると、元の型に戻らず `GeomAbs_OffsetCurve` のまま返る(曲線そのものは円・直線で、標本点の残差は 1e-10 以下)。標本点を当てはめて直す | `duocad/kernel_sketch.py` `_entities_of_offset_curve` |
 | 楕円を広げて縮めた面(辺が楕円のずらし曲線のずらし曲線)を `BRepOffsetAPI_MakeOffset` でさらに広げると、例外も `IsDone()=False` も出さずに壊れたワイヤを返す(20×10 の楕円を R=1, d=1.5 で包むと面積 43.3 と −16.8 の2枚。正しくは 236.81 の1枚)。同じ面でも距離によっては `IsDone()=False` で失敗する(角度 30 度で R=1, d=2)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにしてから渡すと access violation。広げるのに失敗するか、結果が「1枚で面積が減らない」でなければ、その辺を有理でない多項式の B-スプラインに近似し直してやり直す | `duocad/kernel_sketch.py` `_dilate_faces`・`_offset_ready` |
 | `GeomConvert_ApproxCurve` に連続性 C2・次数上限 3 を頼むと、断らずに5次の B-スプラインを返す(C2 には5次が要る)。3次で頼めるのは C1 まで | `duocad/kernel_sketch.py` `_approximated_beziers` |
-| 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length` も楕円・B-spline で粗い(楕円 40×2 で +1.74%)。許容差を渡す | `duocad/brep_geometry.py` `edge_length` |
+| 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差が粗く、楕円・B-spline で誤差が出る(楕円 40×2 で +1.74%。build123d の `Edge.length` も同趣旨)。許容差を渡す | `duocad/brep_geometry.py` `edge_length` |
 | 螺旋の歯を芯の円柱へ `Fuse` すると、`BRepCheck` が真のまま芯が消える寸法がある(M5×0.8 で体積 −84%) | [THREAD.md](THREAD.md)「形の作り方」 |
 | `VolumeProperties_s` の既定積分(Eps 無し)は何周も巻いた B-spline の面で狂う(歯だけで −19%、ねじの軸で 1.5e-03) | [THREAD.md](THREAD.md)「体積の既定積分はねじ山で狂う」 |
 | `BRepBuilderAPI_Sewing` に蓋と帯を辺を共有させたまま渡すと、端の辺を縮退扱いにして殻にならない | [THREAD.md](THREAD.md)「採る: 面から直接組む」 |
@@ -70,15 +70,14 @@
   ただし面数は三角形数と同じ(同一平面の三角形は併合されるが有機形状では併合されない)ので、
   10万三角形なら10万面のソリッドになり B-rep 編集は事実上できない。STEP 交換用途に限る。
   `is_valid` はプロパティで、`s.is_valid()` と呼ぶと `TypeError`。
-- **build123d と OCP 直叩きの行数の差は「問い合わせ」に集中する**(同じ形状 — 箱60×40×20 + 貫通穴r8 +
-  縦エッジr3フィレット、体積 43824.2481 で一致 — の実測): build123d 純正 7行(由来マップ取れない)/
-  OCP 直接 32行(取れる)/ 生 `TopoDS_Shape` を保持し build123d を問い合わせにだけ使う 12行(取れる)。
-  差のほぼ全部は述語による問い合わせ(Z に平行な辺を選ぶ: 11行 対 1行)。**操作層を OCP で書き直す費用は
-  1 verb あたり +3〜5行**で、問い合わせ層は履歴の有無に関係なく要る(MCP が述語を要求する)。
-  これが「操作は OCP、問い合わせは build123d」(`duocad/query.py`)の根拠。
-- **build123d 0.11.1 は推移依存で SVG 一式を連れてくる**: svgelements 1.9.6(`transform` 解決済み座標で
-  Move/Line/Arc/CubicBezier/QuadraticBezier/Close に正規化。`Arc` は rx/ry/center/theta/delta を持つ)・
-  svgpathtools 1.7.2・ocpsvg 0.6.0・svgwrite 1.4.3。`duocad/svg_import.py` は追加依存ゼロでこれを前提にしている。
+- **問い合わせ層は OCP 直叩き**(`duocad/query.py` → `brep_topology` / `brep_geometry` / `kernel`)。
+  build123d を外す前の実測では、同じ形状(箱60×40×20 + 貫通穴r8 + 縦エッジr3フィレット、体積 43824.2481)で
+  操作は OCP 直叩きが build123d 純正より行数が増える一方、述語による問い合わせの差が支配的だった(Z に平行な辺: 11行 対 1行)。
+  **操作層を OCP で書き直す費用は 1 verb あたり +3〜5行**で、問い合わせ層は履歴の有無に関係なく要る(MCP が述語を要求する)。
+- **SVG パースは `svgelements` を直接依存に固定**(1.9.6。`pyproject.toml`)。
+  昔は build123d 0.11.1 の推移依存で svgpathtools 等も入っていたが、`duocad/svg_import.py` が使うのは
+  svgelements だけ(`transform` 解決済み座標で Move/Line/Arc/CubicBezier/QuadraticBezier/Close に正規化。
+  `Arc` は rx/ry/center/theta/delta を持つ — 下の罠参照)。
 - **svgelements の変換済み `Arc` は `rx` `ry` `theta` `delta` `point()` が信用できない**: 実体は center / prx / pry
   (元の楕円の t=0・π/2 の点)と start / end と sweep で、変換は5点にそのまま掛かる。`rx` `ry` `theta` `get_rotation`
   は prx ⊥ pry を仮定して3点から作り直す値なので、せん断・回転後の非等倍スケールでは主軸でなく共役半径が入り

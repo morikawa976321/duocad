@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from duocad import kernel
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
@@ -28,9 +29,10 @@ LONG_AXIS = 16  # 合成の箱は 20mm 級なので、余白込みで要素サ�
 
 
 def _box(size, at):
+    """`TopoDS_Shape`(`duocad/topopt` は build123d のオブジェクトを受けない)。"""
     from build123d import Box, Pos
 
-    return Pos(*at) * Box(*size)
+    return (Pos(*at) * Box(*size)).wrapped
 
 
 def _face(shape, normal, point) -> int:
@@ -56,7 +58,7 @@ def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None, shift=(0.0, 0.
     at = tuple(s + o for s, o in zip(shift, offset))
     left = _box((10.0, 10.0, 10.0), shift)
     right = _box((10.0, 10.0, 10.0), at)
-    keep = left + right
+    keep = kernel.make_compound([left, right])
     fixed = _face(keep, (-1, 0, 0), (shift[0] - 5.0, shift[1], shift[2]))
     load = _face(keep, (0, 0, 1), (at[0], at[1], at[2] + 5.0))
     return ds.Conditions(
@@ -245,7 +247,7 @@ def test_the_bounding_box_does_not_depend_on_an_earlier_tessellation() -> None:
 
     from duocad import kernel
 
-    shape = Cylinder(radius=10.0, height=30.0)
+    shape = Cylinder(radius=10.0, height=30.0).wrapped
     before = ds.condition_body("cyl", shape, roles=("keep",))
     vx.triangles_from_shape(vx.unwrap(shape), deviation=2.0)  # 粗い三角形分割を付ける
     after = ds.condition_body("cyl", shape, roles=("keep",))
@@ -332,7 +334,7 @@ def test_conditions_spanning_islands_fail_even_with_a_common_component(split_nam
 
 def test_a_compound_keep_body_separated_by_an_obstacle_fails() -> None:
     """1ボディ内の保持片が除外壁の向こうに孤立したら、CADからの導出でも検出する。"""
-    keep = _box((10, 10, 10), (-15, 0, 0)) + _box((10, 10, 10), (15, 0, 0))
+    keep = kernel.make_compound([_box((10, 10, 10), (-15, 0, 0)), _box((10, 10, 10), (15, 0, 0))])
     conditions = ds.Conditions(
         keep=keep,
         fixed_faces=_face(keep, (-1, 0, 0), (-20, 0, 0)),
@@ -464,8 +466,8 @@ def test_keep_and_condition_bodies_that_touch_or_overlap_are_accepted(second) ->
 
     left = _box((10.0, 10.0, 10.0), (0.0, 0.0, 0.0))
     right = _box(*second)
-    keep = kernel.make_compound([left.wrapped, right.wrapped])
-    right_lo, right_hi = vx._shape_bbox(right.wrapped)
+    keep = kernel.make_compound([left, right])
+    right_lo, right_hi = vx._shape_bbox(right)
     top = ((right_lo[0] + right_hi[0]) / 2, (right_lo[1] + right_hi[1]) / 2, right_hi[2])
     conditions = ds.Conditions(
         keep=keep,
@@ -477,7 +479,7 @@ def test_keep_and_condition_bodies_that_touch_or_overlap_are_accepted(second) ->
     )
     space = ds.derive(conditions, elements_long_axis=LONG_AXIS)
     for body in (left, right):
-        alone, _ = vx.occupancy(vx.triangles_from_shape(body.wrapped, deviation=0.1), space.grid, allow_empty=True)
+        alone, _ = vx.occupancy(vx.triangles_from_shape(body, deviation=0.1), space.grid, allow_empty=True)
         assert np.all(space.keep[alone])
 
 

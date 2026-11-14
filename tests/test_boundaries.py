@@ -15,10 +15,9 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # 免除はここに名指しした相対パスだけ(DUOCAD_DIRからの相対パス)。**ディレクトリ単位では
 # 免除しない** —— 新しく足したファイルが黙って境界の外へ出るのを防ぐため。
 #
-# `topopt/` は**B-repを直接読む**数値計算のサブシステム(voxelize は OCCT の厳密なbboxを、
-# anchor/design_space は検証用の合成ソリッドを build123d で組む)。`kernel.bounding_box` へ
-# 回すと `SetGap` の順序が違って値が 1e-7mm 動き、`check_voxelize.py` [7](辺長が要素サイズの
-# 整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。
+# `topopt/` は**B-repを直接読む**数値計算のサブシステム(voxelize は OCCT の厳密なbboxを使う)。
+# `kernel.bounding_box` へ回すと `SetGap` の順序が違って値が 1e-7mm 動き、`check_voxelize.py` [7]
+# (辺長が要素サイズの整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。
 #
 # `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査・箱/格子との共通体積)・
 # `kernel_meshing.py`(OCCTの面分割の段階制御と境界交差の再分割)・
@@ -58,7 +57,7 @@ OCP_ALLOWED = frozenset(
         "topopt/voxelize.py",
     }
 )
-BUILD123D_ALLOWED = frozenset({"query.py"})
+BUILD123D_ALLOWED = frozenset()
 # 「実際に import している」ことを確かめる本体側の1本(境界検査が機能する前提)
 OCP_CORE = "kernel.py"
 
@@ -299,15 +298,14 @@ def test_kernel_module_actually_imports_ocp():
     assert "OCP" in _imported_module_roots(DUOCAD_DIR / OCP_CORE)
 
 
-def test_only_query_module_imports_build123d():
-    """verb側(サブパッケージ含む)はbuild123dを直接importしない
-    (問い合わせはquery.py越しに行う。差し替え可能に保つ。動的importでの迂回も検出する)。"""
+def test_no_duocad_module_imports_build123d():
+    """`duocad/` 配下(サブパッケージ含む)は build123d を直接 import しない(動的 import の迂回も検出する)。"""
     violations = [
         rel
         for rel, py_file in _source_files()
         if rel not in BUILD123D_ALLOWED and "build123d" in _imported_module_roots(py_file)
     ]
-    assert violations == [], f"build123dを直接importしているファイル(免除一覧に無いものは禁止): {violations}"
+    assert violations == [], f"build123dを直接importしているファイル: {violations}"
 
 
 def test_boundary_scan_detects_every_import_form(tmp_path):
