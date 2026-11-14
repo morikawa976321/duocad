@@ -11,6 +11,7 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any, Optional
 
+from . import document_snapshot
 from .document_name import check_characters, check_writable_length
 from .oplog import OpLog
 
@@ -22,6 +23,8 @@ _RESERVED_WINDOWS_NAMES = frozenset({
 })
 
 THUMBNAIL_DIR = ".thumbnails"
+#: 再生結果のスナップショットの置き場(`models/.snapshots/<文書のファイル名>.snap`。`document_snapshot` のモジュール docstring)。
+SNAPSHOT_DIR = ".snapshots"
 #: 受け取るPNGの上限[バイト]。画面が撮るのは128px四方で、RGBAを圧縮せず持っても64KiB。
 THUMBNAIL_MAX_BYTES = 256 * 1024
 _PNG_SIGNATURE = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A])
@@ -41,15 +44,22 @@ class DocumentStore:
         self.models_dir = Path(models_dir).resolve()
         self.exports_dir = Path(exports_dir).resolve()
         self.warnings = warnings if warnings is not None else []
+        #: スナップショットを書けなかった・消せなかった回数(派生物なので警告にしない。テストと診断が見る)。
+        self.snapshot_failures = 0
 
     def ensure_models_dir(self) -> None:
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
     def read_document_file(self, source: Path) -> dict:
+        return self.read_document_file_with_digest(source)[0]
+
+    def read_document_file_with_digest(self, source: Path) -> tuple[dict, str]:
+        """文書のファイルを読み、中身と、ファイルのバイト列の鍵(スナップショットの鍵。`document_snapshot.file_digest`)を返す。"""
         if not source.exists():
             raise FileNotFoundError(f"開けるファイルが無い: {source}")
         try:
-            return json.loads(source.read_text(encoding="utf-8"))
+            raw = source.read_bytes()
+            return json.loads(raw.decode("utf-8")), document_snapshot.file_digest(raw)
         except json.JSONDecodeError as error:
             where = "空のファイル" if not source.stat().st_size else f"{error.lineno}行{error.colno}列で読めなくなった"
             raise ValueError(
@@ -72,6 +82,8 @@ class DocumentStore:
         if not respelling:  # 綴りだけの改名では、移す前のサムネイルが target と同じファイル
             self.drop_thumbnail(target)
         self.carry_thumbnail(source, target, move=True)
+        # ファイルは `os.replace` で移っただけ(バイト列が同じ)ならスナップショットの鍵は今も合う。ログから書き直したときは合わない(開くとき捨てられる)。
+        self.carry_snapshot(source, target)
 
     def is_respelling(self, current_name: Optional[str], target: Path) -> bool:
         """`target` が編集中のファイル自身の別の綴り(大文字小文字だけの違い。大文字小文字を区別しないファイルシステムで同じファイルになる)か。"""
@@ -295,6 +307,69 @@ class DocumentStore:
         except OSError:
             return {**reply, "png": None, "thumb": None}
         return {**reply, "png": base64.b64encode(data).decode("ascii"), "thumb": thumb}
+
+    # ---------------------------------------------------------------- 再生結果のスナップショット
+    # 文書のJSONには入れない派生物(`document_snapshot`)。失敗は元の操作を失敗にしない(文書は再生で必ず開ける)。
+    def _snapshot_path(self, document: Path) -> Path:
+        return document.parent / SNAPSHOT_DIR / f"{document.name}.snap"
+
+    def write_snapshot(self, document: Path, captured: "document_snapshot.Captured", file_sha256: str | None = None) -> bool:
+        """スナップショットを書く(呼び手が書き込みの錠を持つ)。書けなければ False。
+
+        `file_sha256` は写しが対応する文書のファイルの鍵。省くと、いま書いたばかりのファイルを読んで鍵にする
+        (自動保存が文書のファイルを書いた直後の同じ錠の中だけ。ファイルと写しが同じ状態だと分かっている)。
+        """
+        try:
+            data = captured.pack(file_sha256 or document_snapshot.file_digest(document.read_bytes()))
+            target = self._snapshot_path(document)
+            target.parent.mkdir(exist_ok=True)
+            # 先読みの子とサーバが同じ文書を同時に書いても、一時ファイルが重ならない。
+            staging = target.with_name(f"{target.name}.{os.getpid()}.writing")
+            staging.write_bytes(data)
+            os.replace(staging, target)
+            return True
+        except Exception:  # noqa: BLE001 - 派生物なので、書けなくても保存は成功のまま
+            self.snapshot_failures += 1
+            return False
+
+    def read_snapshot(self, document: Path, file_sha256: str, operation_count: int) -> "document_snapshot.Restored | None":
+        """鍵の合うスナップショットを読む。無い・合わない・壊れているときは None(合わないものは消す)。"""
+        path = self._snapshot_path(document)
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None
+        try:
+            return document_snapshot.restore(data, file_sha256=file_sha256, operation_count=operation_count)
+        except document_snapshot.SnapshotLight:
+            return None  # 再生が速い文書の印。再生で開くのが正しいので残す
+        except document_snapshot.SnapshotError:
+            self.drop_snapshot(document)
+            return None
+
+    def snapshot_status(self, document: Path, file_sha256: str) -> str:
+        """鍵の合うスナップショットがあるか。"ready" / "light"(再生が速い印) / "missing"(`document_snapshot.header_status`)。"""
+        try:
+            data = self._snapshot_path(document).read_bytes()
+        except OSError:
+            return "missing"
+        return document_snapshot.header_status(data, file_sha256)
+
+    def drop_snapshot(self, document: Path) -> None:
+        try:
+            self._snapshot_path(document).unlink(missing_ok=True)
+        except OSError:
+            self.snapshot_failures += 1
+
+    def carry_snapshot(self, source: Path, target: Path) -> None:
+        origin = self._snapshot_path(source)
+        if not origin.exists():
+            return
+        try:
+            (target.parent / SNAPSHOT_DIR).mkdir(exist_ok=True)
+            os.replace(origin, self._snapshot_path(target))
+        except OSError:
+            self.snapshot_failures += 1
 
     def resolve_export_path(self, path: Any, suffixes: tuple[str, ...]) -> Path:
         """書き出し先を絶対パスにする。相対は `exports_dir` 基準(その外へ逃げる経路は拒否)。絶対パスはそのまま(テスト・MCPの明示パス用)。

@@ -156,6 +156,10 @@ class OpLog:
         self._numbering[kind] = number
         return number
 
+    def numbering(self) -> Dict[str, int]:
+        """通し番号の写し(スナップショットが載せる。`to_json` の `numbering` と同じ中身)。"""
+        return dict(self._numbering)
+
     def note_number(self, kind: str, number: int) -> None:
         """ログに記録済みの番号を使用済みにする(redo / 再生の側。振り直さない)。"""
         self._numbering[kind] = max(self._numbering.get(kind, 0), int(number))

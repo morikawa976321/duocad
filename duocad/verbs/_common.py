@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, Callable, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
 from .. import kernel, kernel_sketch, kernel_worker, meshbody, naming, selection
@@ -24,6 +24,10 @@ from ._sketch_geometry import geometries_overlap
 #: 正しい記録である。
 SNAPSHOTS: "WeakKeyDictionary[Document, dict]" = WeakKeyDictionary()
 
+#: 再生せずに開いた文書(`document_snapshot`)の undo 用スナップショットを、最初に要ったときに作る口。文書ごとに1回だけ呼ばれる。
+#: 呼び手は `Session._register_history_hydrator`。`parameters.rebuild` は履歴を自分で作り直すので外す。
+HYDRATORS: "WeakKeyDictionary[Document, Callable[[Document], None]]" = WeakKeyDictionary()
+
 
 def remember(doc: Document, body_id: BodyId, seq: int, shape: Any) -> None:
     """操作前の形状を覚える(同じseqで再適用されたら上書きする)。"""
@@ -35,8 +39,17 @@ def recall(doc: Document, body_id: BodyId, seq: int) -> Any:
 
     無ければ **KeyError**(黙ってundoを空振りさせない)。保存したログを読んだだけで
     再生していない文書は、スナップショットを持たないのでここへ来る。
+    ただし再生結果のスナップショットから開いた文書(`HYDRATORS`)は、ここで一度だけログを再生して表を作ってから探す。
     """
     snapshots = SNAPSHOTS.get(doc)
+    if (snapshots is None or (body_id, seq) not in snapshots) and doc in HYDRATORS:
+        hydrate = HYDRATORS.pop(doc)
+        try:
+            hydrate(doc)
+        except BaseException:
+            HYDRATORS[doc] = hydrate  # 失敗は次の undo でもう一度試す
+            raise
+        snapshots = SNAPSHOTS.get(doc)
     if snapshots is None or (body_id, seq) not in snapshots:
         raise KeyError(
             f"no snapshot for undo of seq={seq} on body {body_id!r}: "

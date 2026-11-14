@@ -15,6 +15,7 @@ from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.BRepTools import BRepTools
 from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation, BOPAlgo_Splitter
 from OCP.TopAbs import TopAbs_SOLID
@@ -28,6 +29,31 @@ from . import (
     brep_geometry as _brep_geometry,
     brep_topology as _brep_topology,
 )
+
+
+def ocp_version() -> str:
+    """OCP の版(スナップショットの鍵)。取れなければ "?"。"""
+    import OCP
+
+    return str(getattr(OCP, "__version__", "?"))
+
+
+def is_shape(obj) -> bool:
+    """OCP の形(`TopoDS_Shape` とその派生)か。"""
+    return isinstance(obj, TopoDS_Shape)
+
+
+def shape_to_bytes(shape) -> bytes:
+    """形を BinTools のバイト列にする(三角形分割は載せない。面・辺の添字の数え方が往復で保たれる)。"""
+    stream = io.BytesIO()
+    BinTools.Write_s(shape, stream, False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+    return stream.getvalue()
+
+
+def shape_from_bytes(data: bytes):
+    shape = TopoDS_Shape()
+    BinTools.Read_s(shape, io.BytesIO(data))
+    return shape
 
 
 def encode_brep(shape):
