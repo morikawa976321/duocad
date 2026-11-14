@@ -75,6 +75,7 @@ from .channel import CHANNELS, StableUpdater, describe, hidden_features
 from .agent.loop import VersionChanged
 from .entry import entry_for
 from .session import DocumentBusy
+from .snapshot_prebuild import Prebuilder
 from .workspace import NoCommand
 from .server import (
     DEFAULT_WEB_DIST,
@@ -1178,6 +1179,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             "stdioのMCPは即EOFで終わり、サーバごと落ちる)"
         ),
     )
+    parser.add_argument(
+        "--no-prebuild",
+        action="store_true",
+        help=(
+            "起動後に最近の文書の再生結果(スナップショット)を裏で先に作らない"
+            "(既定は作る。`duocad/snapshot_prebuild.py`)"
+        ),
+    )
     args = parser.parse_args(argv)
     if args.data_dir is not None:
         args.data_dir = args.data_dir.expanduser().resolve()
@@ -1199,10 +1208,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         exports_dir=args.exports_dir,
         opened=False,
     )
+    prebuilder = None
+    if not args.no_prebuild:
+        prebuilder = Prebuilder(session.store, current_name=lambda: session.current_name)
+        session.prebuilder = prebuilder
+        prebuilder.start()
     try:
         asyncio.run(_run(session, args))
     except KeyboardInterrupt:
         _log("bye")
+    finally:
+        if prebuilder is not None:
+            prebuilder.stop()
     return 0
 
 

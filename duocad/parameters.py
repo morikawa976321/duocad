@@ -168,7 +168,7 @@ def rebuild(
     失敗したら、再生で書き換わる最適化条件(版も含む)・undo 用スナップショット・ログと由来も元へ戻す。
     """
     global _REBUILDING
-    from .verbs._common import SNAPSHOTS
+    from .verbs._common import HYDRATORS, SNAPSHOTS
 
     source = doc.log
 
@@ -239,6 +239,8 @@ def rebuild(
         body.visible = body.id not in hidden_bodies
     for sketch in doc.sketches:
         sketch.visible = sketch.id not in hidden_sketches
+    # 履歴(undo 用の操作前の形)は今の再生で全部作り直した。開いたときの遅延の口が後から古い形を混ぜないよう外す。
+    HYDRATORS.pop(doc, None)
 
 
 # --------------------------------------------------------------------------------------

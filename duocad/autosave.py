@@ -77,12 +77,18 @@ class Autosave:
     def supersede(self) -> None:
         self._write_seq += 1
 
-    def write(self, target: Path, payload: Any) -> None:
-        """他文書への結果配送も、自動保存と同じ一時ファイルの排他に従う。"""
+    def write(self, target: Path, payload: Any, snapshot: Any = None) -> None:
+        """他文書への結果配送も、自動保存と同じ一時ファイルの排他に従う。
+
+        `snapshot`(`document_snapshot.Captured`)があれば、文書のファイルを書いた直後に同じ錠の中で再生結果も預ける
+        (ファイルの鍵で結ぶので、間に別の書き込みが挟まれば開くときに捨てられる)。
+        """
         with self.locked():
             self.store.write_document_file(target, payload)
+            if snapshot is not None:
+                self.store.write_snapshot(target, snapshot)
 
-    def save_current(self, name: str, log: OpLog, created: float | None) -> None:
+    def save_current(self, name: str, log: OpLog, created: float | None, snapshot: Any = None) -> None:
         target = self.store.resolve_writable_name(name)
         # 呼び手が変更を配る前に中身を確定し、ワーカーにはログを渡さない。
         payload = log.to_file_chunks(created=created)
@@ -92,9 +98,9 @@ class Autosave:
             self._writer = concurrent.futures.ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="duocad-autosave"
             )
-        self._pending_write = self._writer.submit(self._write_queued, target, payload, seq)
+        self._pending_write = self._writer.submit(self._write_queued, target, payload, seq, snapshot)
 
-    def _write_queued(self, target: Path, payload: list, seq: int) -> None:
+    def _write_queued(self, target: Path, payload: list, seq: int, snapshot: Any = None) -> None:
         if seq != self._write_seq:
             return
-        self.write(target, payload)
+        self.write(target, payload, snapshot)
