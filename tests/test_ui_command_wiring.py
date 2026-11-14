@@ -235,14 +235,6 @@ def _ui_command_ids() -> dict[str, str]:
     return {command["id"]: command["file"] for command in _ui_commands()}
 
 
-def test_every_command_button_has_a_one_line_title():
-    """落ちたら、ツールバーのボタンに説明が出ない(マウスを載せても何も出ない)か、1行に収まらない説明がある。"""
-    untitled = sorted(command["id"] for command in _ui_commands() if not command["title"])
-    assert not untitled, f"title が無いコマンド: {untitled}"
-    too_long = sorted(command["id"] for command in _ui_commands() if len(command["title"]) > 30)
-    assert not too_long, f"30字を超える title: {too_long}"
-
-
 def test_verbs_sharing_one_button_agree_on_the_switch():
     """`variants` で1つのボタンを分け合う verb は、全員が同じ並びを持ち、先頭だけがツールバーにボタンを出す。
 

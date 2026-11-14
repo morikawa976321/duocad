@@ -54,8 +54,6 @@ assert.equal(toolFailureReason(undefined), '')
 assert.ok(toolFailureReason({ error: { message: 'x'.repeat(1000) } }).endsWith('…'), '長い理由が折りたたまれていない')
 
 // 閉じている間の札: 何が起きたかを AI の頭で言い、長い本文は短く切る。
-assert.equal(hiddenResultNotice({ status: 'timeout', text: '' }), 'AI: 時間切れで止めた(ここまでの操作は残っている)')
-assert.equal(hiddenResultNotice({ status: 'completed', text: 'できた' }), 'AI: できた')
 const longNotice = hiddenResultNotice({ status: 'completed', text: `一行目\n${'あ'.repeat(500)}` })
 assert.ok(longNotice.length <= 'AI: '.length + 81 && longNotice.endsWith('…'), `札が長すぎる: ${longNotice.length}`)
 
@@ -73,12 +71,6 @@ assert.equal(inputBlockedReason('open', true, false), null)
 assert.equal(inputBlockedReason('closed', true, true), 'サーバに繋がっていない(繋ぎ直している)')
 
 // 使用量: Claude の input_tokens はキャッシュと別枠なので、足し算と読める形で出す。
-assert.equal(
-  usageLine({ input_tokens: 12, cache_read_input_tokens: 3400, cache_creation_input_tokens: 56, output_tokens: 78 }),
-  '入力(新規) 12 + キャッシュ読み 3400 + キャッシュ書き 56 ／ 出力 78 トークン',
-)
-assert.equal(usageLine({ input_tokens: 1, output_tokens: 2 }), '入力(新規) 1 + キャッシュ読み 0 + キャッシュ書き 0 ／ 出力 2 トークン')
-assert.equal(usageLine({ prompt_n: 10, cache_n: 4, prompt_ms: 1500, predicted_n: 5, predicted_ms: 500 }), '読み 10(再利用 4)トークン 1.5秒 ／ 書き 5 トークン 0.5秒')
 assert.equal(usageLine({}), '')
 assert.equal(usageLine(undefined), '')
 

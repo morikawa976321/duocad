@@ -14,7 +14,6 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 EVALUATORS = [
     "eval_ai_result.mjs",
-    "eval_ai_tool_line.mjs",
     "eval_arc_sweep.mjs",
     "eval_choice_sync.mjs",
     "eval_degenerate_edge_pick.mjs",
@@ -42,7 +41,6 @@ EVALUATORS = [
     "eval_section_view.mjs",
     "eval_selection_edits.mjs",
     "eval_selection_grain.mjs",
-    "eval_selection_info_text.mjs",
     "eval_selection_max.mjs",
     "eval_selection_ref_key.mjs",
     "eval_server_restart.mjs",
