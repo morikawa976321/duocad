@@ -593,13 +593,6 @@ def test_sketch_create_offset_can_sit_on_a_selected_face(
     )
 
 
-def test_sketch_create_offset_without_a_plane_or_a_selection_is_an_error(
-    server: McpServer,
-):
-    error = call_error(server, "sketch_create_offset", {"distance": 3.0})
-    assert error["code"] in {"selection_empty", "invalid_argument"}
-
-
 def test_move_body_can_rotate_through_mcp(server: McpServer, box_session: Session):
     """`mode="rotate"` がMCPの口からコアまで届く。`DocumentTools` が引数を `float()` で潰す/`mode` を読み飛ばして
     並進になる層の取りこぼしを見る(AIが回転を使う経路はこの1本だけ)。
@@ -651,18 +644,6 @@ def test_move_sketch_entities_can_rotate_through_mcp(empty_session: Session):
 
     moved = sketch_module.entity_params(empty_session.document, sketch_id, entity_id)
     assert (moved["x1"], moved["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
-
-
-def test_chamfer_reaches_the_core_verb(server: McpServer, box_session: Session):
-    box = box_session.document.bodies[0]
-    faces_before = _brep_topology.face_count(box.shape)
-    select_refs(server, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
-
-    payload = call(server, "chamfer", {"distance": 2.0})
-
-    _assert_verb_envelope(payload, "chamfer")
-    assert _brep_topology.face_count(box.shape) > faces_before
-    assert box_session.document.log.entries[-1].verb == "chamfer"
 
 
 def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session):

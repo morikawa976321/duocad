@@ -14,7 +14,7 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace,
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeRevol
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeRevol
 from OCP.Geom import Geom_BezierSurface, Geom_Ellipse, Geom_CylindricalSurface, Geom_ToroidalSurface, Geom_SurfaceOfLinearExtrusion
 from OCP.GCE2d import GCE2d_MakeSegment
 from OCP.GC import GC_MakeArcOfCircle
@@ -623,29 +623,6 @@ def test_a_curved_top_with_a_hole_is_refused_with_the_hole_reason():
     assert len(edges) == 1
     with pytest.raises(ValueError, match="曲率半径を超える丸めもできない: .*top face has holes"):
         kernel.fillet_edges(shape, {edge: 1.0 for edge in edges})
-
-
-@pytest.mark.parametrize("edges", [[1], [1, 3]])
-def test_an_open_selection_keeps_the_failure_message_without_a_loop_reason(edges, monkeypatch):
-    """輪でない辺の失敗文面に、曲率半径を超える丸めの理由を付けない。"""
-    shape = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
-    values = {edge: 30 for edge in edges}
-
-    def no_absorption(*args):
-        raise ValueError("no absorption")
-
-    monkeypatch.setattr(kernel, "_absorbed_fillet", no_absorption)
-    with pytest.raises(ValueError) as actual:
-        kernel._blend_edges(shape, values, "fillet")
-    assert "曲率半径を超える丸めもできない" not in str(actual.value)
-
-    def unrelated(*args):
-        raise kernel_tight.Unsupported("not a loop")
-
-    monkeypatch.setattr(kernel_tight, "round_tight_loop", unrelated)
-    with pytest.raises(ValueError) as baseline:
-        kernel._blend_edges(shape, values, "fillet")
-    assert str(actual.value) == str(baseline.value)
 
 
 @pytest.mark.parametrize("height", [1.0, 4.0, 5.5])

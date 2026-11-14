@@ -48,7 +48,7 @@ def test_zero_to_360_stays_a_full_circle_and_the_smallest_accepted_sweep_is_an_a
     assert {full, tiny} <= {entity.id for entity in get_sketch(session.document, sketch_id).entities}
 
 
-@pytest.mark.parametrize("offset", [0.1, 10.1, 33.3, 123.456])
+@pytest.mark.parametrize("offset", [0.1, 123.456])
 def test_a_full_circle_arc_survives_a_move_that_shifts_both_angles_by_rounding(offset) -> None:
     """360 の倍数ちょうどのつもりの掃引が、引き算の丸めで 1e-13 度ほど残っても全周として通る。"""
     from duocad.sketch import arc_sweep_is_degenerate

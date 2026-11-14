@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import os
-import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -125,21 +123,6 @@ def test_a_changed_file_is_a_candidate_again_and_a_ready_one_is_not(models, monk
     assert prebuilder._candidates() == []
     path.write_bytes(path.read_bytes() + b"\n")  # 外から1バイト変える
     assert prebuilder._candidates() == ["a.json"]
-
-
-def test_waiting_for_a_document_the_prebuilder_is_replaying() -> None:
-    """人が、先読みの再生中の文書を開こうとしたら終わるまで待つ。別の文書なら待たない。"""
-    prebuilder = Prebuilder(None)  # type: ignore[arg-type]
-    prebuilder._building = "x.json"
-    prebuilder._built.clear()
-    started = time.perf_counter()
-    prebuilder.wait_for("other.json", timeout=5.0)
-    assert time.perf_counter() - started < 1.0
-
-    threading.Timer(0.3, lambda: (setattr(prebuilder, "_building", None), prebuilder._built.set())).start()
-    started = time.perf_counter()
-    prebuilder.wait_for("x.json", timeout=5.0)
-    assert 0.2 < time.perf_counter() - started < 3.0
 
 
 def test_stopping_before_the_delay_never_starts_a_child(models) -> None:

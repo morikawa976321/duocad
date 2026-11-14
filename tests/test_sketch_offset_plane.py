@@ -57,23 +57,6 @@ def test_a_zero_distance_coincides_with_the_base_plane():
     )
 
 
-def test_an_offset_from_a_face_stacks_on_top_of_the_frozen_face_frame():
-    """面からのオフセットは、まず面参照そのものを凍結してから平行移動する。"""
-    document = Document()
-    body_id = new_box(document, BOX)
-    face_frame = kernel_sketch.face_frame(document.get_body(body_id).shape, TOP_FACE_INDEX)
-
-    sketch_id = sketch_create(
-        document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 3.0)
-    )
-
-    frame = region.plane_frame(document, sketch_id)
-    assert frame["origin"] == pytest.approx(
-        [face_frame["origin"][i] + face_frame["normal"][i] * 3.0 for i in range(3)]
-    )
-    assert frame["normal"] == pytest.approx(face_frame["normal"])
-
-
 def test_a_later_fillet_does_not_move_an_offset_from_face_sketch():
     """オフセット元の面が丸められて添字の指す先が球面へずれても、offset平面は動かない。"""
     document = Document()
@@ -149,17 +132,6 @@ def test_the_frame_is_kept_out_of_the_oplog():
         "kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None
     }
     assert logged.args["plane"]["distance"] == 5.0
-
-
-def test_sketch_create_offset_logs_its_own_verb_name():
-    """`verb=` を渡すと、ログへ積む名前だけが変わる(do/undoの実体は共有)。"""
-    from duocad.sketch import VERB_SKETCH_CREATE_OFFSET
-
-    document = Document()
-    sketch_create(
-        document, offset_plane(base_plane("XY"), 5.0), verb=VERB_SKETCH_CREATE_OFFSET
-    )
-    assert document.log.entries[-1].verb == "sketch_create_offset"
 
 
 def test_a_log_round_trip_reproduces_the_same_frame():

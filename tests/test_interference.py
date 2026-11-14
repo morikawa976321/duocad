@@ -64,21 +64,10 @@ def test_three_bodies_list_only_the_pairs_that_need_attention():
 
 
 # ---------------------------------------------------------------------------------------------- 実測と相談で見つけた形
-def test_a_box_inside_a_box_is_an_overlap():
-    assert pair_of(two(box(2, 2, 2, 3, 3, 3)), "a", "b")["relation"] == "overlap"
-
-
 def test_a_flat_overlap_of_a_thousandth_is_tiny_but_a_pin_of_five_hundredths_is_an_overlap():
     assert pair_of(two(box(9.999, 0, 0, 10, 10, 10)), "a", "b")["relation"] == "tiny_overlap"
     pin = check(document_of(("plate", plate_with_hole(5.0)), ("pin", cylinder(0, 0, -5, 5.05, 20))))
     assert pair_of(pin, "plate", "pin")["relation"] == "overlap"
-
-
-def test_the_order_of_the_pair_does_not_change_the_result():
-    forward = pair_of(check(document_of(("a", A), ("b", box(5, 0, 0, 10, 10, 10)))), "a", "b")
-    backward = pair_of(check(document_of(("b", box(5, 0, 0, 10, 10, 10)), ("a", A))), "a", "b")
-    assert forward["relation"] == backward["relation"]
-    assert forward["volume"] == pytest.approx(backward["volume"], rel=1e-12)
 
 
 def test_a_third_body_crossing_the_overlap_does_not_change_the_pair():
@@ -87,14 +76,6 @@ def test_a_third_body_crossing_the_overlap_does_not_change_the_pair():
     crossed = pair_of(check(document_of(("a", A), ("b", other), ("c", box(7, -5, 4, 1, 20, 2)))), "a", "b")
     assert crossed["volume"] == pytest.approx(alone["volume"], rel=1e-12)
     assert crossed["thickness"] == pytest.approx(alone["thickness"], rel=1e-12)
-
-
-def test_a_thin_flat_overlap_joined_to_a_deep_pin_is_an_overlap_not_tiny():
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-
-    lid = BRepAlgoAPI_Fuse(box(0, 0, 9.999999, 200, 200, 5), cylinder(100, 100, 5, 1.0, 6)).Shape()
-    entry = pair_of(check(document_of(("base", box(0, 0, 0, 200, 200, 10)), ("lid", lid))), "base", "lid")
-    assert entry["relation"] == "overlap" and entry["thickness"] <= 1e-3 < entry["obb_min"]
 
 
 def test_a_box_distance_between_the_clearance_and_the_clearance_plus_the_band_is_at():

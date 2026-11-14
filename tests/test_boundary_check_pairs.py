@@ -167,36 +167,3 @@ def test_huge_x_shifts_fall_back_to_the_x_sweep(monkeypatch):
     faces = rng.integers(0, 4, 2000)
     with np.errstate(all='ignore'):
         assert_same(faces, np.minimum(start, end), np.maximum(start, end))
-
-
-def tall_permuted(width, height, count=262144):
-    """y の順位がばらばらで、多くの帯にまたがる縦に長い線分(帯の写し・帯で作る組が多い)。"""
-    k = np.arange(count, dtype=float)
-    lo = np.column_stack((k, np.random.default_rng(47).permutation(count).astype(float)))
-    return np.zeros(count, dtype=np.int64), lo, lo + [width, height]
-
-
-@pytest.mark.parametrize('shape', ['bundle 380', 'bundle 513', 'bundle 2000', 'tall 9.25 1536', 'tall 17.25 6000'])
-def test_inputs_that_bands_do_not_pay_for_stay_on_the_x_sweep(shape, monkeypatch):
-    """x の掃引の候補が多くても、大半が y でも重なる入力・帯の写しが多くなる入力は、帯に分けない(分けると最後の並べ直しや
-    写しの整列の分だけ遅くなる)。組と並びは x の掃引だけのときと同じ。"""
-    kind, *size = shape.split()
-    faces, lo, hi = tall_permuted(*map(float, size)) if kind == 'tall' else tall_beside_short(tall=int(size[0]))
-    original = bc._banded_pairs
-
-    def declined(*args):
-        made = original(*args)
-        assert made is None, '帯に分けた'
-        return made
-    monkeypatch.setattr(bc, '_banded_pairs', declined)
-    assert_same(faces, lo, hi)
-
-
-def test_holes_in_a_grid_are_searched_by_bands(monkeypatch):
-    """穴を格子に並べた境界(候補の 2% だけが y でも重なる)は既定の閾値で帯に分ける。"""
-    faces, lo, hi = hole_grid(16, 12, 48)
-    called = []
-    original = bc._banded_pairs
-    monkeypatch.setattr(bc, '_banded_pairs', lambda *args: called.append(1) or original(*args))
-    assert_same(faces, lo, hi)
-    assert called

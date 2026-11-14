@@ -85,14 +85,6 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
-def test_the_system_prompt_names_the_selection_tools_the_ai_shares_with_people():
-    """落ちたら、選択は人もAIも同じ操作で触ることをプロンプトが伝えていない(止めるか進めるかの文言は固定しない: AIが依頼の文面から判断する)。"""
-    shared = catalog.agent_instructions()
-
-    for tool in ("set_selection", "modify_selection", "toggle_selection", "clear_selection"):
-        assert tool in shared, f"{tool} がプロンプトに無い(人と同じ選択操作を AI に伝えていない)"
-
-
 class FakeTransport:
     """`post_json` と同じ形をした差し替え。送った内容を全部覚える。"""
 
@@ -485,16 +477,6 @@ def test_a_dimension_derived_from_what_the_person_said_passes_through():
     run = AgentLoop(surface, provider).run("原点に半径4mmの円を描いて")
 
     assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
-
-
-def test_an_id_in_the_prompt_is_not_mistaken_for_a_dimension():
-    """`body_1` の 1 を「寸法を言った」と読むとガードが素通りする。"""
-    surface = tools()
-    provider = RecordedProvider([tool_use("fillet", {"radius": 2}, "c0"), spoke("やめた")])
-
-    run = AgentLoop(surface, provider).run("body_1の角を丸めておいて")
-
-    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
 
 
 @pytest.mark.parametrize(

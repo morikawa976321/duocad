@@ -1,5 +1,5 @@
 /**
- * 比較スクショの距離決め(`shoot-topopt.mjs` が使う。純関数なので `tests/eval_shoot_framing.mjs` が評価する)。
+ * 比較スクショの距離決め(`shoot-topopt.mjs` が使う)。
  */
 
 const cross = (a, b) => [

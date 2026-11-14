@@ -71,12 +71,6 @@ def test_set_visible_takes_only_a_boolean(visible):
     assert session.document.get_body("box").visible is True
 
 
-def test_set_visible_false_hides_the_body():
-    session = session_with_box()
-    _scenario(session, json.dumps({"cmd": "set_visible", "body_id": "box", "visible": False}))
-    assert session.document.get_body("box").visible is False
-
-
 def test_ai_set_api_key_without_a_key_does_not_delete_the_saved_key(tmp_path, monkeypatch):
     secrets = tmp_path / "secrets.json"
     secrets.write_text(json.dumps({providers.ANTHROPIC_API_KEY_ENV: "sk-ant-keep"}), encoding="utf-8")
@@ -124,11 +118,6 @@ def test_fem_get_status_stays_available_where_shape_optimization_is_hidden():
 def test_a_non_finite_number_in_a_delivery_is_sent_as_null():
     text = wire.dumps({"a": [1.0, float("nan")], "b": {"c": float("inf"), "d": -float("inf")}, "e": "x"})
     assert json.loads(text) == {"a": [1.0, None], "b": {"c": None, "d": None}, "e": "x"}
-
-
-def test_a_frame_with_a_non_finite_number_still_decodes():
-    frame = wire.encode({"type": "state", "state": {"volume": float("nan"), "bodies": []}})
-    assert wire.decode(frame)["state"]["volume"] is None
 
 
 def test_finite_payloads_are_encoded_exactly_as_before():

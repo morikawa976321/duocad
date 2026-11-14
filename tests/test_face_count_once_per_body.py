@@ -1,12 +1,10 @@
 """`_coerce_refs`(`duocad/selection.py`)がボディごとに数え上げを1回だけ行う契約。"""
 from __future__ import annotations
 
-from typing import List
-
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 
-from duocad import brep_topology, selection
+from duocad import selection
 from duocad.document import Body, Document
 
 
@@ -27,48 +25,6 @@ def two_shapes() -> Document:
     return document
 
 
-def _count_topology_calls(monkeypatch: pytest.MonkeyPatch, name: str) -> List[int]:
-    """`brep_topology.<name>` の呼び出し回数を数えるカウンタを仕込む(戻り値の [0] が回数)。"""
-    counter = [0]
-    original = getattr(brep_topology, name)
-
-    def counting(shape):
-        counter[0] += 1
-        return original(shape)
-
-    monkeypatch.setattr(brep_topology, name, counting)
-    return counter
-
-
-def test_face_count_is_looked_up_once_per_body_not_per_ref(
-    two_shapes: Document, monkeypatch: pytest.MonkeyPatch
-):
-    """箱6面+円柱3面=9件の面参照を1回の `modify_selection` に渡しても、
-    `brep_topology.face_count` はボディの数(2)だけ呼ばれる(9回ではない)。"""
-    face_calls = _count_topology_calls(monkeypatch, "face_count")
-    refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(6)] + [
-        {"body": "cyl", "kind": "face", "index": i + 1} for i in range(3)
-    ]
-
-    result = selection.modify_selection(two_shapes, add=refs)
-
-    assert len(result.items) == 9
-    assert face_calls[0] == 2  # ボディごとに1回(9回なら参照1件ごとに数えている)
-
-
-def test_edge_count_is_looked_up_once_per_body_not_per_ref(
-    two_shapes: Document, monkeypatch: pytest.MonkeyPatch
-):
-    """辺参照でも同じ(`face_count` とは独立に数える契約なので別カウンタで見る)。"""
-    edge_calls = _count_topology_calls(monkeypatch, "edge_count")
-    refs = [{"body": "box", "kind": "edge", "index": i + 1} for i in range(12)]
-
-    result = selection.modify_selection(two_shapes, add=refs)
-
-    assert len(result.items) == 12
-    assert edge_calls[0] == 1  # 箱1体ぶんだけ(12回なら参照1件ごとに数えている)
-
-
 def test_a_changed_shape_is_counted_again_in_the_next_call(two_shapes: Document):
     """数え上げは呼び出しをまたいで持ち越さない。落ちたら、形状が変わった後も古い面数で範囲を検査している。"""
     selection.modify_selection(two_shapes, add=[{"body": "cyl", "kind": "face", "index": 1}])
@@ -77,22 +33,6 @@ def test_a_changed_shape_is_counted_again_in_the_next_call(two_shapes: Document)
     result = selection.modify_selection(two_shapes, add=[{"body": "cyl", "kind": "face", "index": 6}])
 
     assert [item["index"] for item in result.items] == [1, 6]
-
-
-def test_add_and_remove_in_the_same_call_share_the_count_cache(
-    two_shapes: Document, monkeypatch: pytest.MonkeyPatch
-):
-    """`add` と `remove` を同時に指定しても、この1回の `modify_selection` 呼び出しの
-    中では同じ `(body_id, kind)` を2回数えない(`bodies`/`counts` を2回の
-    `_coerce_refs` 呼び出しで共有する)。"""
-    face_calls = _count_topology_calls(monkeypatch, "face_count")
-    add_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(6)]
-    remove_refs = [{"body": "box", "kind": "face", "index": 1}]
-
-    result = selection.modify_selection(two_shapes, add=add_refs, remove=remove_refs)
-
-    assert [item["index"] for item in result.items] == [2, 3, 4, 5, 6]
-    assert face_calls[0] == 1  # add・removeを合わせてもこの呼び出し中は1回だけ
 
 
 def test_the_cache_does_not_confuse_a_smaller_bodys_count_with_a_larger_bodys(

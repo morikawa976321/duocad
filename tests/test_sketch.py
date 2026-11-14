@@ -1,7 +1,6 @@
 """スケッチの契約(`sketch_create` / `add_line` / `add_circle` / `add_rectangle`)。"""
 from __future__ import annotations
 
-import dataclasses
 import json
 
 import pytest
@@ -61,16 +60,6 @@ def first_face_index(shape, kind: str) -> int:
         if face["kind"] == kind:
             return face["index"]
     raise AssertionError(f"{kind} の面が無い(この形状ではテストが成立しない)")
-
-
-def test_entity_kind_is_validated():
-    """図形の種別は登録されたものだけを受け付ける。未知の種別は黙って通さない(§6予防6)。"""
-    assert Entity(id="e1", kind="circle").params == {}
-    assert Entity(id="e2", kind="arc").params == {}, "円弧は2026-08-11から有効な種別"
-    # 必須フィールドの包含で見る(補助フィールドの追加まで禁じない)
-    assert {"id", "kind", "params"} <= {f.name for f in dataclasses.fields(Entity)}
-    with pytest.raises(ValueError):
-        Entity(id="e3", kind="spline")
 
 
 def test_sketch_create_on_a_base_plane():

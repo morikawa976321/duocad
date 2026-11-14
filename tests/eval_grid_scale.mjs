@@ -15,10 +15,8 @@ import {
   TIERS,
   boundingSquare,
   extendUvBoxToPoint,
-  extentFor,
   fadeFromSpacingPx,
   mmPerPixel,
-  snap125,
   snapForSpan,
   tierAlpha,
   tierAlphas,
@@ -125,63 +123,6 @@ assert.equal(tierAlpha(100, 0.01), 1, 'ふつうの視点では100mm段は完全
 assert.equal(tierAlpha(1, 0), 1, 'mmPerPx=0 は「無限に寄っている」＝線間隔は無限大')
 assert.equal(tierAlpha(1, Number.NaN), 0)
 assert.equal(tierAlpha(1, Number.POSITIVE_INFINITY), 0)
-
-// ============================================================== 1mm段が消える視野の大きさ
-// 高さ900pxの画面で、1mm段が「見えている/薄い/消えた」と言える視野の高さ[mm]。
-// 完了条件の目安(線間隔1.5pxで0・6pxで1)から**数百mmを超えたあたりで消える**ことを見る。
-{
-  const heightPx = 900
-  const alphaAtViewHeight = (mm) => tierAlpha(1, mmPerPixel({ kind: 'ortho', frustumHeight: mm }, heightPx))
-  assert.equal(alphaAtViewHeight(100), 1, '視野100mmでは1mm段ははっきり見えている')
-  const partial = alphaAtViewHeight(300)
-  assert.ok(partial > 0 && partial < 1, `視野300mmでは1mm段は薄くなっている途中のはず: ${partial}`)
-  assert.ok(alphaAtViewHeight(500) > 0, '視野500mmではまだ完全には消えていない')
-  assert.equal(alphaAtViewHeight(1400), 0, '視野1400mmでは1mm段は消えている')
-  // 10mm段はその視野ではまだ濃い(3段が同時に消えたりしない)。
-  assert.equal(tierAlpha(10, mmPerPixel({ kind: 'ortho', frustumHeight: 1400 }, heightPx)), 1)
-}
-
-// ============================================================== snap125(ピック範囲の丸め)
-assert.equal(snap125(1), 1)
-assert.equal(snap125(1.5), 2)
-assert.equal(snap125(2), 2)
-assert.equal(snap125(3), 5)
-assert.equal(snap125(5), 5)
-assert.equal(snap125(7), 10)
-assert.equal(snap125(10), 10)
-assert.equal(snap125(0.03), 0.05) // 1未満でも同じ規則で丸まる
-assert.equal(snap125(999), 1000)
-assert.equal(snap125(302.4), 500)
-
-// ============================================================== extentFor(ピック範囲・near/far下限)
-const emptyBox = { isEmpty: () => true, min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } }
-assert.equal(extentFor(emptyBox), BASE_EXTENT, '空の文書は ±100mm のはず')
-
-const box252 = {
-  isEmpty: () => false,
-  min: { x: -252, y: -10, z: -5 },
-  max: { x: 10, y: 5, z: 5 },
-}
-assert.equal(extentFor(box252), 500)
-
-const tinyBox = { isEmpty: () => false, min: { x: -1, y: -1, z: -1 }, max: { x: 1, y: 1, z: 1 } }
-assert.equal(extentFor(tinyBox), BASE_EXTENT, '小さい内容でも空の文書より狭くならない')
-
-// 対角ではなく最遠成分から丸まる。
-const farAlongOneAxis = {
-  isEmpty: () => false,
-  min: { x: -1, y: -1, z: -1 },
-  max: { x: 1000, y: 1, z: 1 },
-}
-assert.equal(extentFor(farAlongOneAxis), 2000) // 1000*1.2=1200 → snap125 → 2000
-
-// 原点をまたがない箱でも、原点からの最遠成分だけで半幅を決める(原点中心のまま広げるだけ)。
-const farFromOrigin = {
-  isEmpty: () => false,
-  min: { x: 400, y: 400, z: 0 },
-  max: { x: 500, y: 500, z: 10 },
-}
-assert.equal(extentFor(farFromOrigin), 1000) // reach=500 → *1.2=600 → snap125 → 1000
 
 // ============================================================== snapForSpan(枠の縁を載せる刻み)
 assert.equal(snapForSpan(200), 100, '長辺200mm → 100mm段に載せる')

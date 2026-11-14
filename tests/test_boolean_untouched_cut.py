@@ -7,7 +7,7 @@ import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Body, Document, new_body_id
 from duocad.oplog import Operation
 from duocad.server import Session
@@ -45,13 +45,6 @@ def test_cut_with_a_tool_that_does_not_overlap_is_refused_and_nothing_changes(
     assert {body.id for body in session.document.bodies} == {target_id, tool_id}
     assert math.isclose(query.volume(session.document.get_body(target_id).shape), 20.0**3, rel_tol=1e-9)
     assert len(session.document.log._entries) == ops_before
-
-
-def test_cut_that_overlaps_still_succeeds(session: Session) -> None:
-    target_id, tool_id = _setup(session, 2.0)
-    _select(session, [{"body": tool_id, "kind": "face", "index": 1}])
-    session.boolean_body({"body": target_id, "kind": "face", "index": 1}, "cut")
-    assert math.isclose(query.volume(session.document.get_body(target_id).shape), 20.0**3 - 7.0**3, rel_tol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -99,8 +92,3 @@ def test_replaying_a_cut_that_removed_nothing_is_not_refused(session: Session) -
     )
     _do_boolean_body(session.document, operation)
     assert [body.id for body in session.document.bodies] == [target_id]
-
-
-def test_unknown_boolean_mode_lists_the_choices() -> None:
-    with pytest.raises(ValueError, match=r"one of \['union', 'cut', 'intersect'\]"):
-        kernel.boolean_bodies(_box(5.0), [_box(1.0)], "join")

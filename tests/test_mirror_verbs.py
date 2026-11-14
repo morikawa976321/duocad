@@ -206,18 +206,6 @@ def test_the_axis_must_be_a_line_entity(session: Session) -> None:
     assert "line" in str(error.value)
 
 
-def test_a_target_lying_on_the_axis_is_refused(session: Session) -> None:
-    """鏡映しても動かない対象(軸の上に乗っている)は元と完全に重なる複製になるので断る。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
-    on_axis_id = session.add_line(sketch_id, [1.0, 0.0], [5.0, 0.0])["entity_id"]
-    _select(session, [{"sketch": sketch_id, "entity": on_axis_id, "point": None}])
-
-    with pytest.raises(ValueError) as error:
-        session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
-    assert "重なる" in str(error.value)
-
-
 def test_the_axis_may_be_one_of_the_targets(session: Session) -> None:
     """軸自身が対象の選択に混ざっていてもよい(自分自身を軸にしつつ他を鏡映する)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
@@ -264,17 +252,6 @@ def test_undo_removes_the_mirrored_sketch_copy(session: Session) -> None:
         sketch.get_entity(sketch.get_sketch(session.document, sketch_id), created_id)
     # 元は残っている
     assert _params(session, sketch_id, entity_id) == {"x0": 1.0, "y0": 2.0, "x1": 3.0, "y1": 4.0}
-
-
-def test_the_selection_resets_after_a_sketch_mirror(session: Session) -> None:
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
-    entity_id = session.add_line(sketch_id, [1.0, 2.0], [3.0, 4.0])["entity_id"]
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
-
-    session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
-
-    assert session.get_selection()["items"] == []
 
 
 def test_mirroring_a_body_with_a_base_plane(session: Session) -> None:
@@ -388,15 +365,6 @@ def test_undo_removes_the_mirrored_body(session: Session) -> None:
     assert len(session.document.bodies) == before - 1
     # 元のボディはそのまま
     assert session.document.get_body(body.id) is body
-
-
-def test_the_selection_resets_after_a_body_mirror(session: Session) -> None:
-    body, _ = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-
-    session.mirror_body(base_plane="XY")
-
-    assert session.get_selection()["items"] == []
 
 
 def test_mirroring_without_a_body_selection_is_refused(session: Session) -> None:

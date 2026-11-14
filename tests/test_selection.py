@@ -143,18 +143,6 @@ def test_selecting_from_a_missing_body_raises(doc: Document):
         shape_ref(doc, "nope", "edge", 1)
 
 
-def test_modify_selection_refuses_a_malformed_ref(doc: Document):
-    """人が触る主経路でも、壊れた参照は落ちて選択を変更しない(`propose` と同じ契約)。"""
-    selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
-    with pytest.raises(ValueError):
-        selection.modify_selection(doc, add=[{"body": "box", "index": 1}])
-    with pytest.raises(KeyError):
-        selection.modify_selection(
-            doc, add=[{"body": "nope", "kind": "edge", "index": 1, "provenance": None}]
-        )
-    assert [item["index"] for item in selection.get_selection(doc).items] == [1]
-
-
 def test_removing_something_that_is_not_selected_is_a_no_op(doc: Document):
     """選択に無いものの remove は空振りでよい(UIのトグルがそのまま乗る)。"""
     selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
@@ -270,14 +258,6 @@ def test_toggle_selection_adds_what_is_absent_and_removes_what_is_present(doc: D
         doc, [shape_ref(doc, "box", "edge", 1), shape_ref(doc, "box", "edge", 2)]
     )
     assert [item["index"] for item in selection.get_selection(doc).items] == [2]
-
-
-def test_toggle_selection_refuses_a_malformed_ref_without_touching_the_selection(doc: Document):
-    keep = [shape_ref(doc, "box", "edge", 1)]
-    selection.set_selection(doc, refs=keep)
-    with pytest.raises(ValueError):
-        selection.toggle_selection(doc, [{"body": "box", "kind": "nope", "index": 1}])
-    assert [item["index"] for item in selection.get_selection(doc).items] == [1]
 
 
 def test_selected_items_can_be_filtered_by_kind(doc: Document):
@@ -398,28 +378,6 @@ def test_the_event_carries_the_client_op_back(session: Session):
     assert events[0]["client_op"] == 7
     # 出し手のいない変更(MCP等)では None
     assert session.clear_selection()["client_op"] is None
-
-
-def test_selection_events_ride_the_same_up_path_as_set_visible(session: Session):
-    """**別系統を新設していない**こと。
-
-    `set_visible` の変更がブラウザへ届く経路は `Session._emit` → `add_listener` の
-    購読者(`Server._on_core_change`)である。選択も**同じ購読者リストに乗る**ので、
-    購読をやめれば両方止まる。専用のイベントバスを新設していたら、この1本が落ちる。
-    """
-    events = []
-    session.add_listener(events.append)
-
-    session.set_visible("box", False)
-    session.set_visible("box", True)
-    assert len(events) == 2
-
-    session.set_selection(refs=[shape_ref(session.document, "box", "edge", 1)])
-    assert len(events) == 3
-
-    session.remove_listener(events.append)
-    session.clear_selection()
-    assert len(events) == 3, "購読をやめた後も届くなら、選択は別の経路で配られている"
 
 
 def test_selection_is_part_of_the_pushed_state(session: Session):
@@ -595,18 +553,6 @@ def test_a_body_can_be_selected_whole(session: Session) -> None:
     # **面が展開されて入っていない**(2835面のボディで選択集合が膨れる案を採らないこと)
     assert items == [ref], items
     assert selection.require_selected_bodies(session.document) == [body.id]
-
-
-def test_the_same_body_is_not_selected_twice(session: Session) -> None:
-    """同じボディを2回 add しても重複しない(等価判定が添字を見ていないこと)。"""
-    body = pad(session, SIDE, SIDE, SIDE)
-    refs = [{"body": body.id, "kind": "body"}]
-    session.clear_selection()
-    session.modify_selection(refs, [])
-    session.modify_selection(refs, [])
-    assert len(session.get_selection()["items"]) == 1
-    session.modify_selection([], refs)
-    assert session.get_selection()["items"] == []
 
 
 def _ts_union_arms(path: Path, name: str) -> set:

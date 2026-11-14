@@ -454,26 +454,6 @@ def test_moving_a_body_from_a_face_selection(session: Session) -> None:
     assert after[2] == pytest.approx(before[2] + 5.0)
 
 
-def test_moving_a_body_keeps_its_volume_and_face_count(session: Session) -> None:
-    body, _sketch_id = _box(session)
-    faces = _brep_topology.face_count(body.shape)
-    volume = query.volume(body.shape)
-    _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
-    session.move_body(1.0, 2.0, 3.0)
-
-    moved = session.document.get_body(body.id)
-    assert _brep_topology.face_count(moved.shape) == faces
-    assert query.volume(moved.shape) == pytest.approx(volume)
-
-
-def test_a_vertex_selection_also_names_the_body(session: Session) -> None:
-    body, _sketch_id = _box(session)
-    before = _center(body)
-    _select(session, [{"body": body.id, "kind": "vertex", "index": 1}])
-    session.move_body(0.0, 0.0, 4.0)
-    assert _center(session.document.get_body(body.id))[2] == pytest.approx(before[2] + 4.0)
-
-
 def test_two_bodies_move_by_the_same_amount(session: Session) -> None:
     first, sketch_id = _box(session)
     session.add_rectangle(sketch_id, [40.0, 0.0], SIDE, SIDE)

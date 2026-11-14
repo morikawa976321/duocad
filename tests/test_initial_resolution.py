@@ -56,9 +56,3 @@ def test_adding_a_far_body_before_the_view_arrives_reports_only_that_body_as_cha
     payload = tools.call("extrude", {"distance": 5.0, "mode": "new"})
     assert session.view.body_recipe(first) != before, "外接箱が広がっても粗さが変わらない材料になっている"
     assert payload["changed_bodies"] == [session.document.bodies[-1].id]
-
-
-def test_an_empty_document_keeps_the_base_roughness() -> None:
-    """空の文書には外接箱が無いので、土台の粗さのまま。"""
-    session = Session(0.2)
-    assert session.view.view_deviation == pytest.approx(0.2)

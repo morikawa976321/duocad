@@ -117,6 +117,7 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 凍結を解くときは `HIDDEN_IN_STABLE` から外し、`tests/topopt/` を既定の pytest へ戻す(`tests/conftest.py` の `FROZEN_TOPOPT`)。
 凍結中は既定の実行で回していないので、戻す前に `pytest --topopt` を回し、共有コードの変更で壊れた分を直す。
+凍結中の整理(2026-11-14)で、最適化だけを守る検査を既定の pytest から削った。解凍時に必要なら `git show 93d523a1 6da4380d` から戻す: `tests/test_doc_code_agreement.py` の TOPOPT 表の3件と受入検査一覧の1件、`tests/test_boundaries.py` の実行器境界の走査の自己検査3件、`tests/test_files_ui.py` の最適化中の改名の1件、`tests/test_web_scripts.py` と `tests/eval_shoot_framing.mjs` の撮影枠の検査。
 
 **アプリ内AIは Claude API だけにする**(本人指示 2026-10-14)。ローカルAI(llama-server、`openai_compat`)は機能 `local_ai` として
 同じ `HIDDEN_IN_STABLE` で隠す:

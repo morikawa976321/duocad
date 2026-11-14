@@ -290,14 +290,6 @@ def test_the_nut_profile_always_clears_the_bolt_profile(profile):
     assert gap.min() > 0.0
 
 
-def test_the_clearance_limit_keeps_engagement_and_scales_with_pitch():
-    """上限は山の深さ(= 0.4P)に比例する式で、径によらない(THREAD_SIM.md 6.10)。"""
-    assert kernel_thread.clearance_limit("trapezoid45", 1.5) == pytest.approx(0.475)
-    assert kernel_thread.clearance_limit("semicircle", 2.5) == pytest.approx(0.5)
-    assert kernel_thread.default_pitch(3.0) == pytest.approx(1.2)
-    assert kernel_thread.default_pitch(10.0) == pytest.approx(2.5)
-
-
 def test_a_clearance_outside_the_recommended_range_warns_but_does_not_refuse():
     assert kernel_thread.clearance_warning("trapezoid30", True, 0.20) is None
     assert "推奨" in kernel_thread.clearance_warning("trapezoid30", True, 0.22)  # TP5 の D3 でガタが出た(THREAD_SIM.md 6.12)

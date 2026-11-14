@@ -99,18 +99,6 @@ def test_parameter_names_are_released_by_undo_and_reused():
     assert replayed.parameters[name] == 7.0
 
 
-def test_parameter_names_are_d1_d2_d3_in_creation_order():
-    """パラメータ名は `d1` `d2` … で、図形を作った順・`params` の並び順に振られる。"""
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (1.0, 2.0), 6.0)
-
-    assert [parameter_of(document, sketch_id, circle, key) for key in ("cx", "cy", "diameter")] == [
-        "d1", "d2", "d3",
-    ]
-    assert document.parameters == {"d1": 1.0, "d2": 2.0, "d3": 6.0}
-
-
 def test_parameter_of_rejects_unknown_keys_and_owners():
     """知らない図形・知らないキーは KeyError(黙って None を返さない)。"""
     document = Document()

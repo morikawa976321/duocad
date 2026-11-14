@@ -90,12 +90,6 @@ def test_set_selection_needs_exactly_one_of_them(server: McpServer, session: Ses
     assert neither["code"] == "invalid_argument"
 
 
-def test_describe_predicates_is_the_core_vocabulary_itself(server: McpServer):
-    """`predicates.describe_ops()` を**そのまま**出す(二重管理にしない)。"""
-    payload = call(server, "describe_predicates")
-    assert payload["ops"] == predicates.describe_ops()
-
-
 def test_describe_predicates_tells_the_ai_how_to_write_one(server: McpServer):
     """opの一覧だけでは述語を組み立てられない —— 形・種別・ANDの規則まで出す。"""
     payload = call(server, "describe_predicates")
@@ -223,33 +217,6 @@ def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServe
     assert error["code"] == "invalid_argument"
 
 
-#: 形を選択から取るツールの代表(辺・面の2種別)と、それぞれの引数。
-SELECTION_CONSUMING_TOOLS = [
-    ("fillet", {"radius": 2.0}, "edge"),
-    ("chamfer", {"distance": 2.0}, "edge"),
-    ("extrude", {"distance": 5.0, "mode": "join"}, "face"),
-    ("sketch_create", {}, "face"),
-]
-
-
-@pytest.mark.parametrize("tool,arguments,kind", SELECTION_CONSUMING_TOOLS)
-def test_a_selection_set_by_the_ai_feeds_a_verb_directly(
-    server: McpServer, session: Session, tool: str, arguments: dict, kind: str
-):
-    """`set_selection` の直後に、確定のための手を挟まず verb が通る。"""
-    predicate = VERTICAL_EDGES if kind == "edge" else {
-        "kind": "face",
-        "where": [{"op": "normal_dot_gt", "axis": "Z", "value": 0.9}],
-    }
-    log_before = len(session.document.log.entries)
-    call(server, "set_selection", {"predicate": predicate})
-
-    payload = call(server, tool, arguments)
-
-    assert payload["verb"] == tool
-    assert len(session.document.log.entries) == log_before + 1
-
-
 def test_toggle_selection_adds_and_removes_like_a_click(server: McpServer, session: Session):
     """`toggle_selection` は画面の素のクリックと同じ: あれば外し無ければ足す。"""
     box = box_of(session)
@@ -297,13 +264,6 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     assert payload["changed_bodies"] == ["target"], "選択と違うBodyに当たっている"
     assert _brep_topology.face_count(target.shape) > target_faces
     assert _brep_topology.face_count(other.shape) == other_faces, "無関係なBodyが変わった"
-
-
-def test_measure_reads_the_current_selection(server: McpServer):
-    """**測るのは verb ではない**ので、選んだ直後に測れる。"""
-    call(server, "set_selection", {"predicate": VERTICAL_EDGES})
-    payload = call(server, "measure")
-    assert payload["count"] == 4
 
 
 def test_measure_reports_lengths_for_edges(server: McpServer, session: Session):

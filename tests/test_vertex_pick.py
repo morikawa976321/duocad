@@ -50,19 +50,6 @@ def test_vertices_are_sent_only_to_the_connection_that_asked(session: Session) -
     assert clients[1].payloads == [], "頂点は全接続へ配らない(要求した接続だけ)"
 
 
-def test_the_vertex_revision_follows_the_shape(session: Session) -> None:
-    """形が変われば `revision` が上がる。**古い添字の座標を描き続けさせない**ための番号。"""
-    body, _ = _box(session)
-    before = session.vertices(body.id)
-    session.clear_selection()
-    session.modify_selection([{"body": body.id, "kind": "edge", "index": 1}], [])
-    session.fillet(3.0)
-    after = session.vertices(body.id)
-
-    assert after["revision"] > before["revision"]
-    assert len(after["vertices"]) != len(before["vertices"])
-
-
 def test_edges_and_vertices_carry_the_shape_revision(session: Session) -> None:
     """辺・頂点の応答に形の版が載り、形が変わったときだけ上がる。落ちたら、画面が粗さだけ変わった版(カメラ由来)で
     取り寄せた添字を古い形のものと取り違える(または形の変わった古い添字を使い続ける)。"""

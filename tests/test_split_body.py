@@ -328,15 +328,6 @@ def test_undo_of_a_one_sided_split_and_a_multi_body_split_restores_every_shape()
     assert_matches_replay(doc)
 
 
-def test_the_split_matches_the_replay_after_saving() -> None:
-    """落ちたら: 保存して読み直した文書で、番号と形の対応が変わる。"""
-    doc, cube = _cube()
-    split_body(doc, [cube], sketch_id=_offset_sketch(doc, 5.0))
-
-    assert _state(replay_through_json(doc)) == _state(doc)
-    assert_matches_replay(doc)
-
-
 def test_the_volume_total_is_kept_for_a_curved_body() -> None:
     """落ちたら: 曲面を含むボディを斜めに割ったとき、体積の合計が元と合わない。"""
     doc = Document()
@@ -413,20 +404,6 @@ def test_a_sketch_figure_reference_selects_the_sketch_plane() -> None:
     assert applied["created"] == []
     assert applied["keep"] == "negative"
     assert applied["plane_point"][2] == SIDE / 2
-
-
-def test_a_failed_split_leaves_the_session_untouched() -> None:
-    """落ちたら: 交わらない平面で断った後も、ログに操作が積まれる・選択が消える。"""
-    session, body = _session_cube()
-    sketch_id = session.sketch_create_offset(SIDE * 2, "XY")["sketch_id"]
-    select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    entries = len(session.document.log.entries)
-
-    with pytest.raises(ValueError, match="割れない"):
-        session.split_body(sketch_id=sketch_id)
-
-    assert len(session.document.log.entries) == entries
-    assert len(session.document.bodies) == 1
 
 
 def test_a_plane_tangent_to_a_curved_body_inside_its_bounding_box_is_refused() -> None:

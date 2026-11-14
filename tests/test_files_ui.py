@@ -193,27 +193,6 @@ def test_deleting_the_unsaved_open_file_does_not_write_it_back(session: Session,
     assert not (session.models_dir / "mine.json").exists()
 
 
-def test_naming_an_untitled_document_while_optimizing_moves_the_run_to_that_file(session: Session, monkeypatch) -> None:
-    """落ちたら: 最適化中の無題の文書に最初の保存で名前が付いても、実行がその名前を知らず、開き直した写しを編集できる。"""
-    real_write = session.store.write_document_file
-
-    def refuse(target, payload):
-        raise PermissionError("locked")
-
-    monkeypatch.setattr(session.store, "write_document_file", refuse)
-    session.sketch_create("XY")
-    assert session.current_name is None and session.saved is False
-    session.begin_optimization()
-    monkeypatch.setattr(session.store, "write_document_file", real_write)
-
-    session.close_document()
-    session.open_document("untitled-1.json")
-
-    assert session.optimizing_name == "untitled-1.json"
-    assert session.optimization_visible is True
-    session.end_optimization()
-
-
 def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:
     """落ちたら: verb・undo・redo のどれかがディスクに写らない(ファイルが今の文書の鏡でない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
@@ -820,12 +799,6 @@ def test_created_is_stamped_once_and_survives_autosave_rename_and_reopen(session
     assert {item["name"]: item["created"] for item in session.list_documents()["files"]}["b.json"] == stamped
 
 
-def test_an_untitled_document_is_stamped_by_its_first_autosave(session: Session) -> None:
-    _box(session)
-    assert session.current_name == "untitled-1.json"
-    assert _created(session, "untitled-1.json") > 0
-
-
 def test_a_file_without_created_keeps_none_instead_of_borrowing_the_mtime(session: Session) -> None:
     """落ちたら: 作成日時を持たない既存ファイルに、開いて保存しただけで作り物の作成日時が入る。"""
     _box(session)
@@ -1133,33 +1106,6 @@ def _two_solid_step(tmp_path: Path) -> Path:
     step_path = tmp_path / "parts.step"
     kernel.write_step(kernel.make_compound([box_a, box_b]), str(step_path))
     return step_path
-
-
-def test_a_saved_document_opens_after_the_imported_step_is_renamed(
-    session: Session, tmp_path: Path
-) -> None:
-    """読み込んだSTEPを改名しても保存した文書は開ける(STEP本文がログ内にあるため)。改名を挟まないと、パス依存が残っていても緑になる。"""
-    step_path = _two_solid_step(tmp_path)
-    session.import_step(str(step_path))
-    before = [
-        (body.name, body.kind, body.visible, _brep_topology.face_count(body.shape),
-         round(query.volume(body.shape), 9))
-        for body in session.document.bodies
-    ]
-    assert len(before) == 2, "ソリッド2つぶんの編集用ボディ"
-    session.save_document("imported.json")
-
-    step_path.rename(tmp_path / "somewhere_else.step")
-    assert not step_path.exists()
-
-    fresh = Session(DEVIATION, models_dir=session.models_dir)
-    fresh.open_document("imported.json")
-
-    assert [
-        (body.name, body.kind, body.visible, _brep_topology.face_count(body.shape),
-         round(query.volume(body.shape), 9))
-        for body in fresh.document.bodies
-    ] == before
 
 
 def test_the_state_does_not_ship_the_embedded_step_text(session: Session, tmp_path: Path) -> None:

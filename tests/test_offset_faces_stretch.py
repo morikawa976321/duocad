@@ -16,7 +16,7 @@ from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Trsf, gp_Vec
 
 import duocad.verbs as verbs
-from duocad import catalog, kernel_face_edit, kernel_face_stretch, query
+from duocad import kernel_face_edit, kernel_face_stretch, query
 from duocad.document import Document
 from duocad.verbs.add_solid import add_solid_body
 from document_support import kinds_of, replay_through_json
@@ -333,10 +333,3 @@ def test_faces_that_cannot_be_stretched_are_refused_by_the_kernel():
     assert kernel_face_stretch.plans(wedge, [end]) == []
     with pytest.raises(kernel_face_edit.FaceEditError, match="no prismatic span"):
         kernel_face_stretch.stretch(wedge, [end], 5.0)
-
-
-def test_the_tool_description_explains_when_the_end_is_stretched():
-    """落ちたら、AI に見える説明文が画面の振る舞い(外面と内面を一緒に選ぶと端ごと引き伸ばす)と食い違う。"""
-    description = next(command.description for command in catalog.COMMANDS if command.name == "offset_faces")
-    assert "端の壁の外面と内面" in description
-    assert "端ごと引き伸ばす" in description

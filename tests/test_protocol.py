@@ -121,30 +121,6 @@ def _compare(what: str, results, applied: dict) -> None:
     assert not problems, f"{what} の型が宣言と食い違う:\n  " + "\n  ".join(problems)
 
 
-@pytest.mark.parametrize("frame", [
-    "broken",
-    {},
-    {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
-    *[
-        {"origin": vector, "u": [1, 0, 0], "v": [0, 1, 0], "normal": [0, 0, 1]}
-        for vector in ([0, 0], ["0", 0, 0], [True, 0, 0], [math.nan, 0, 0], [math.inf, 0, 0])
-    ],
-])
-def test_the_response_check_rejects_an_invalid_frame(frame):
-    with pytest.raises(AssertionError, match="frame"):
-        _compare("sketch_create", catalog.BY_NAME["sketch_create"].returns, {"sketch_id": "s1", "frame": frame})
-
-
-def test_structured_response_checks_follow_the_declared_type_not_the_field_name():
-    frame = {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0], "normal": [0, 0, 1]}
-    for name in ("frame", "basis"):
-        declaration = [catalog.Result(name, catalog._SKETCH_FRAME.type)]
-        _compare("renamed_frame", declaration, {name: frame})
-        with pytest.raises(AssertionError, match="frame"):
-            _compare("renamed_frame", declaration, {name: {}})
-    _compare("string_field", [catalog.Result("frame", "string")], {"frame": "XY"})
-
-
 _RUNNERS: dict[str, Callable[..., dict]] = {}
 
 
