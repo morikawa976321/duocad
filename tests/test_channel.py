@@ -340,3 +340,46 @@ def test_the_update_script_does_not_inherit_the_servers_python_home(tmp_path, mo
     (kwargs,) = launched
     assert "PYTHONHOME" not in kwargs["env"] and "UV_INTERNAL__PYTHONHOME" not in kwargs["env"]
     assert kwargs["env"]["DUOCAD_TEST_KEEP"] == "1"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="自己更新は Windows だけ")
+def test_auto_update_passes_the_auto_flag_only_when_asked(tmp_path, monkeypatch):
+    """落ちたら: 画面から押した更新でも窓を開く立て直しになり窓が二重になる、または起動時の更新が窓を開かない。"""
+    (tmp_path / "tools" / "stable").mkdir(parents=True)
+    (tmp_path / "tools" / "stable" / "update.ps1").write_text("# テスト", encoding="utf-8")
+    commands = []
+    monkeypatch.setattr(channel.subprocess, "Popen", lambda command, **kw: commands.append(command))
+    relaunch = {"channel": "stable", "port": 1, "http_port": 2, "data_dir": tmp_path}
+    for auto in (False, True):
+        assert channel.spawn_update_script(
+            repo_root=tmp_path, branch="main", log_dir=tmp_path / "logs", relaunch=relaunch, auto=auto
+        ) is None
+    assert "-Auto" not in commands[0] and "-Auto" in commands[1]
+    assert channel.spawn_update_script(
+        repo_root=tmp_path / "nowhere", branch="main", log_dir=tmp_path, relaunch=relaunch
+    ).endswith("が無い")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="更新スクリプトは PowerShell")
+def test_update_script_declares_every_parameter_the_server_passes(tmp_path, monkeypatch):
+    """落ちたら: 起動口やボタンが渡すスイッチ(-Auto 等)を update.ps1 が宣言しておらず、PowerShell が束縛で即終了して
+    立て直しも走らない(安定版が起動しなくなる)。"""
+    commands = []
+    repo = Path(__file__).resolve().parents[1]
+    relaunch = {"channel": "stable", "port": 1, "http_port": 2, "data_dir": tmp_path}
+    with monkeypatch.context() as patch:
+        patch.setattr(channel.subprocess, "Popen", lambda command, **kw: commands.append(command))
+        channel.spawn_update_script(
+            repo_root=repo, branch="main", log_dir=tmp_path / "logs", relaunch=relaunch, gpu=True, auto=True
+        )
+    passed = {a[1:].lower() for a in commands[0] if a.startswith("-") and a not in ("-NoProfile", "-ExecutionPolicy", "-File")}
+    script = repo / "tools" / "stable" / "update.ps1"
+    done = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command",
+         "$t=$null;$e=$null;"
+         f"$a=[System.Management.Automation.Language.Parser]::ParseFile('{script}',[ref]$t,[ref]$e);"
+         "$a.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }"],
+        capture_output=True, text=True, check=True,
+    )
+    declared = {line.strip().lower() for line in done.stdout.splitlines() if line.strip()}
+    assert passed <= declared, passed - declared

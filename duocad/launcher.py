@@ -7,6 +7,9 @@
 既に立っていれば窓を開くだけ。`--no-window` は窓を開かない(更新スクリプトが立て直すとき ——
 画面は開いたまま再接続を待っている)。配置と手順は `docs/STABLE.md`。
 
+**サーバを新しく立てるときは、先に更新を確かめる**(安定版だけ)。main に新しいコミットがあれば `update.ps1` を
+切り離して起動し、この起動口は終わる(スクリプトが取り込み・ビルドの後に、窓も開いて立て直す)。
+
 **ポートは開発版(8765/8766)と分ける**。開発セッションやエージェントが既定のポートで
 サーバを立てても安定版とぶつからず、開発側の `.mcp.json`(8766)が安定版を操作することもない。
 """
@@ -24,7 +27,7 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 
-from .channel import CHANNELS
+from .channel import CHANNELS, UPDATE_BRANCH, probe_updates, spawn_update_script
 from .paths import REPO_ROOT
 
 STABLE_PORT = 8775
@@ -37,6 +40,10 @@ START_TIMEOUT_SECONDS = 120.0
 #: 窓を開いた後、`find_app_window` が窓のタイトルを拾えるまで待つ上限(秒)。続けて起動した2つ目の
 #: 起動口は、1つ目が手放した後にこの窓を探すので、窓が見えるまで手放さない。
 WINDOW_APPEAR_SECONDS = 20.0
+
+#: 起動時の更新確認で `git fetch` を待つ上限(秒)。待っている間は窓が出ないので、サーバ内の確認(60秒)より短くする。
+#: 置いた値(実測ではない)。越えたら更新せずに起動する。
+UPDATE_FETCH_TIMEOUT_SECONDS = 15.0
 
 #: サーバのログ(`<data>/logs/server.log`)をこの大きさで1世代だけ回す。
 LOG_ROTATE_BYTES = 5 * 1024 * 1024
@@ -312,6 +319,29 @@ def _alert(message: str) -> None:
         print(message, file=sys.stderr)
 
 
+def update_before_start(args: argparse.Namespace, data_dir: Path) -> bool:
+    """main に新しいコミットがあれば更新スクリプトを起こす。起こしたら True(この起動口は何もせず終わる)。
+
+    確認できない(オフライン等)・取り込めない(未コミットの変更・main 以外の枝)ときは何もせず、今の版で起動する。
+    """
+    if args.no_update_check or args.channel != "stable" or sys.platform != "win32":
+        return False
+    state = probe_updates(REPO_ROOT, UPDATE_BRANCH, fetch_timeout=UPDATE_FETCH_TIMEOUT_SECONDS)
+    if state["state"] != "available":
+        return False
+    try:
+        error = spawn_update_script(
+            repo_root=REPO_ROOT,
+            branch=UPDATE_BRANCH,
+            log_dir=data_dir / "logs",
+            relaunch={"channel": args.channel, "port": args.port, "http_port": args.http_port, "data_dir": data_dir},
+            auto=True,
+        )
+    except OSError:
+        return False
+    return error is None
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="duocad 安定版の起動口(サーバを立てて窓を開く)")
     parser.add_argument("--channel", choices=CHANNELS, default="stable")
@@ -319,6 +349,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--http-port", type=int, default=STABLE_HTTP_PORT)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--no-window", action="store_true", help="サーバだけ立てて窓は開かない")
+    parser.add_argument(
+        "--no-update-check",
+        action="store_true",
+        help="起動時の更新確認をしない(更新スクリプトの立て直しは必ずこれを付ける。更新が失敗し続けても立て直しが回らないように)",
+    )
     args = parser.parse_args(argv)
     data_dir = args.data_dir.expanduser().resolve()
     url = f"http://127.0.0.1:{args.http_port}/"
@@ -337,6 +372,8 @@ def _launch(args: argparse.Namespace, data_dir: Path, url: str) -> int:
         )
         return 1
     if running is None:
+        if update_before_start(args, data_dir):
+            return 0
         process = spawn_server(args.channel, args.port, args.http_port, data_dir)
         if not wait_for_server(args.http_port, process):
             _alert(_start_failure_message(process, data_dir, args.http_port))
