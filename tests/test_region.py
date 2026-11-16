@@ -126,6 +126,7 @@ def test_a_region_that_cannot_be_tessellated_does_not_empty_the_sketch(monkeypat
         return real(face, deviation, *args)
 
     monkeypatch.setattr(kernel, "tessellate", flaky)
+    monkeypatch.setattr(kernel, "tessellate_plain", lambda *args, **kwargs: None)
 
     listed = next(item for item in session.state_meta()["sketches"] if item["sketch_id"] == sketch_id)["regions"]
 

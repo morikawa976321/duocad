@@ -33,6 +33,7 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_TangentialDeflection
 from OCP.IFSelect import IFSelect_ReturnStatus
@@ -620,6 +621,48 @@ def tessellate(
         "untriangulated": untriangulated,
         "boundary": boundary,
     }
+
+
+#: `tessellate_plain` が、三角形の面積合計と面の面積とのずれをここまで許す(割合)。実測: 円と、円に 1e-4 mm で近似した
+#: ベジェが作る潰れかけた面(面積 2.8 mm²)で、素の分割の正しい出来は -1.3〜+0.6%、領域の外へはみ出した出来は +6.2〜+6.6%。
+PLAIN_AREA_TOLERANCE = 0.03
+#: `tessellate_plain` が、要求の偏差で外れたときに試す、より細かい偏差の段数(1段 = 1/√2 倍。画面の粗さの段と同じ)。
+PLAIN_FINER_STEPS = 3
+
+
+def tessellate_plain(
+    face: Any,
+    deviation: float,
+    expected_area: float,
+    angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
+    rel_tol: float = PLAIN_AREA_TOLERANCE,
+) -> Optional[dict]:
+    """境界検査を通さない素の `BRepMesh_IncrementalMesh` で1面を三角形にし、`{"positions", "indices"}` を返す。
+
+    `tessellate` が取れなかった面の最後の手。三角形の面積合計が `expected_area` の相対 `rel_tol` 以内のときだけ返し、
+    取れない・外れるなら `None`。**照合を外してはいけない**(外部の罠。実測: 面積 5e-5 mm² の薄い面で、素の分割は
+    正しい面積の約 463 倍の三角形を黙って返した)。三角形は返り値にだけ残し、面からは外す。
+
+    素の分割は偏差で成否が交互に変わる(実測: 同じ面で偏差 2.4e-4 mm は領域の外へ約 0.18 mm² はみ出し、1.7e-4 mm は正しい。
+    偏差 1.4 mm 以上では角度偏差 0.35 だと三角形が1つも出ない)。外れたら、偏差を細かい側へ `PLAIN_FINER_STEPS` 段まで
+    ずらして試す。粗くする側へはずらさない(要求より粗い塗りを返さない)。
+    """
+    _brep_checks._check_tessellation_args(face, deviation, angular_deflection)
+    for step in range(PLAIN_FINER_STEPS + 1):
+        try:
+            BRepTools.Clean_s(face)
+            BRepMesh_IncrementalMesh(face, float(deviation) * 2.0 ** (-0.5 * step), False, float(angular_deflection), False)
+            positions, indices = _face_triangles(face)
+        finally:
+            BRepTools.Clean_s(face)
+        if not indices:
+            continue
+        points = np.asarray(positions, dtype=float).reshape(-1, 3)
+        corners = points[np.asarray(indices, dtype=np.int64).reshape(-1, 3)]
+        area = 0.5 * float(np.linalg.norm(np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]), axis=1).sum())
+        if math.isclose(area, expected_area, rel_tol=rel_tol):
+            return {"positions": positions, "indices": indices}
+    return None
 
 
 def _describe_face(face: Any, index: int) -> dict:

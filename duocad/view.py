@@ -718,11 +718,12 @@ class DocumentView:
         payload["revision"] = known[1]
         return payload
 
-    def _warn_sketch_once(self, sketch_id: str, kind: str, message: str) -> None:
-        """同じ失敗(同じ文)は、直るまで1回だけ警告に積む。"""
-        if self._sketch_failures.get((sketch_id, kind)) == message:
+    def _warn_sketch_once(self, sketch_id: str, kind: str, message: str, *, by_message: bool = True) -> None:
+        """同じ失敗は、直るまで1回だけ警告に積む。`by_message` が偽なら文が変わっても出し直さない(粗さで文が変わる失敗用)。"""
+        key = (sketch_id, kind)
+        if key in self._sketch_failures and (not by_message or self._sketch_failures[key] == message):
             return
-        self._sketch_failures[(sketch_id, kind)] = message
+        self._sketch_failures[key] = message
         self.warnings.append(message)
 
     def _sketch_drawing(self, item, drawn: list, content: str) -> "_SketchFills":
@@ -731,14 +732,17 @@ class DocumentView:
         if held is not None and held.document is self.document and held.content == content:
             return held
         held = _SketchFills(self.document, content)
+        # 領域の添字は描くものが変われば別の領域を指す。前の描くものの失敗の記録は引き継がない。
+        for key in [key for key in self._sketch_failures if key[0] == item.id and key[1].startswith("region")]:
+            self._sketch_failures.pop(key)
         try:
             held.frame = region.plane_frame(self.document, item.id)
             if drawn:
                 held.detection = region.detect(item.plane, drawn)
                 held.straight = all(entity["kind"] in _STRAIGHT_KINDS for entity in drawn)
         except Exception as error:
-            self.warnings.append(
-                f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
+            self._warn_sketch_once(
+                item.id, "regions", f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
             )
         self._sketch_fills[item.id] = held
         return held
@@ -755,14 +759,21 @@ class DocumentView:
                 regions = region.fill(
                     held.detection,
                     deviation,
-                    on_error=lambda index, error, sketch_id=item.id: self.warnings.append(
-                        f"スケッチ {sketch_id} の領域 {index} を三角形にできない: {type(error).__name__}: {error}"
+                    on_error=lambda index, error, sketch_id=item.id: self._warn_sketch_once(
+                        sketch_id,
+                        f"region:{index}",
+                        f"スケッチ {sketch_id} の領域 {index} を三角形にできない: {type(error).__name__}: {error}",
+                        by_message=False,
                     ),
                 )
             except Exception as error:
-                self.warnings.append(
-                    f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
+                self._warn_sketch_once(
+                    item.id, "regions", f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
                 )
+            else:
+                for entry in regions:
+                    if entry["indices"]:
+                        self._sketch_failures.pop((item.id, f"region:{entry['index']}"), None)
         held.keep(None if held.straight else deviation, regions)
         return regions
 
