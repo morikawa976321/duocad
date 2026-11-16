@@ -181,7 +181,7 @@ def open_app_window(url: str) -> bool:
         webbrowser.open(url)
         return False
     subprocess.Popen(
-        [edge, f"--app={url}"],
+        [edge, f"--app={url}", "--start-maximized"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
