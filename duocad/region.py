@@ -198,21 +198,34 @@ def detect(plane: dict, entities: List[dict]) -> Detection:
     return Detection(_detected_for(plane, entities))
 
 
+#: これより小さい領域は、三角形にできなくても `on_error` へ知らせない [mm²]。円と、円に 1e-4 mm 程度で近似した曲線を重ねると
+#: 面積 3e-5〜3e-4 mm² の薄い領域が約10個でき、境界検査が解消できず落ちる。本物の領域(実測で最小 1.4 mm²)とは4桁離れていて、
+#: 直せるものでもない。領域は消さず空のまま残す(押し出しが添字で指すので、検出と添字は変えない)。
+UNREPORTED_AREA = 1.0e-3
+
+
 def fill(
     detection: Detection, deviation: float, on_error: Optional[Callable[[int, Exception], None]] = None
 ) -> List[dict]:
-    """検出した領域を偏差 `deviation` で三角形にする。戻り値と `on_error` は `regions_with_geometry` と同じ。"""
+    """検出した領域を偏差 `deviation` で三角形にする。戻り値と `on_error` は `regions_with_geometry` と同じ。
+
+    `kernel.tessellate`(境界検査つき)が落ちた領域は、素の OCCT で三角形にし直し、三角形の面積が領域の面積と合うときだけ採る
+    (`kernel.tessellate_plain`)。それも取れなければ空のまま残し、面積が `UNREPORTED_AREA` 以上の領域だけ `on_error` へ知らせる。
+    """
     faces = [kernel_sketch.copy_face(item["face"]) for item in detection._items]
     out: List[dict] = []
     for item, face in zip(detection._items, faces):
+        first = None
         try:
             mesh = kernel.tessellate(face, deviation)
+            first = mesh["faces"][0] if mesh["faces"] else None
         except Exception as error:  # noqa: BLE001  OCCT 由来の失敗は型で絞れない。領域ごとに隔離する
-            if on_error is None:
-                raise
-            on_error(item["index"], error)
-            mesh = {"faces": []}
-        first = mesh["faces"][0] if mesh["faces"] else None
+            first = _plain_triangles(face, deviation, item["area"])
+            if first is None:
+                if on_error is None:
+                    raise
+                if item["area"] >= UNREPORTED_AREA:
+                    on_error(item["index"], error)
         out.append(
             {
                 "index": item["index"],
@@ -223,6 +236,13 @@ def fill(
             }
         )
     return out
+
+
+def _plain_triangles(face: Any, deviation: float, area: float) -> Optional[dict]:
+    try:
+        return kernel.tessellate_plain(face, deviation, area)
+    except Exception:  # noqa: BLE001  OCCT 由来の失敗は型で絞れない。取れなければ元の失敗を知らせる
+        return None
 
 
 #: 領域検出(`kernel_sketch.sketch_regions`)の結果を、入力そのもの(姿勢と展開した図形)の署名で引く表。
