@@ -323,7 +323,7 @@ def test_the_update_script_does_not_inherit_the_servers_python_home(tmp_path, mo
     real_popen = channel.subprocess.Popen
 
     def popen(command, **kwargs):  # git(subprocess.run)は通し、更新スクリプトの起動だけ横取りする
-        if command[0] != "powershell.exe":
+        if Path(command[0]).stem.lower() not in ("pwsh", "powershell"):
             return real_popen(command, **kwargs)
         launched.append(kwargs)
 
@@ -375,7 +375,7 @@ def test_update_script_declares_every_parameter_the_server_passes(tmp_path, monk
     passed = {a[1:].lower() for a in commands[0] if a.startswith("-") and a not in ("-NoProfile", "-ExecutionPolicy", "-File")}
     script = repo / "tools" / "stable" / "update.ps1"
     done = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command",
+        [channel._powershell(), "-NoProfile", "-Command",
          "$t=$null;$e=$null;"
          f"$a=[System.Management.Automation.Language.Parser]::ParseFile('{script}',[ref]$t,[ref]$e);"
          "$a.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }"],

@@ -30,7 +30,7 @@
 develop の変更が main に入ってから、開発用のチェックアウトで:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 -ImportModelsFrom models
+pwsh -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 -ImportModelsFrom models
 ```
 
 **pushもPRもせずに今のdevelopから始めるとき**は `-Commit (git rev-parse HEAD)` を足す。開発用のチェックアウトから

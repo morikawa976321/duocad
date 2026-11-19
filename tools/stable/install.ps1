@@ -1,6 +1,6 @@
 ﻿# 安定版の導入(やり直しても壊れない)。docs/STABLE.md
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 [-ImportModelsFrom <dir>] [-Commit <sha>]
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 [-ImportModelsFrom <dir>] [-Commit <sha>]
 #
 # 1. 安定版のcloneを作る(既にあれば触らない。更新は画面のボタンか update.ps1)。
 #    -Commit を渡すと、mainではなくこの開発用チェックアウトにあるそのコミットから始める

@@ -136,6 +136,11 @@ def probe_updates(repo_root: Path = REPO_ROOT, branch: str = UPDATE_BRANCH, *, f
     }
 
 
+def _powershell() -> str:
+    """PowerShell 7(pwsh)を優先する。入っていない機械では Windows PowerShell 5.1 で走らせる(update.ps1 は両方で動く)。"""
+    return shutil.which("pwsh") or "powershell.exe"
+
+
 def spawn_update_script(
     *,
     repo_root: Path,
@@ -158,7 +163,7 @@ def spawn_update_script(
     runner = Path(tempfile.gettempdir()) / f"duocad-update-{os.getpid()}.ps1"
     shutil.copyfile(script, runner)
     command = [
-        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner),
+        _powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner),
         "-RepoRoot", str(repo_root),
         "-Branch", branch,
         "-ServerPid", str(os.getpid()),
